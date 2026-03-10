@@ -1,0 +1,20 @@
+// API Services Index - Export all services for easy imports
+export { default as api } from './api';
+export { default as authService } from './authService';
+export { default as userService } from './userService';
+export { default as dashboardService } from './dashboardService';
+export { default as studentService } from './studentService';
+export { default as teacherService } from './teacherService';
+export { default as programService } from './programService';
+export { default as departmentService } from './departmentService';
+export { default as academicYearService } from './academicYearService';
+export { default as sectionService } from './sectionService';
+export { default as subjectService } from './subjectService';
+export { default as classService } from './classService';
+export { default as enrollmentService } from './enrollmentService';
+export { default as attendanceService } from './attendanceService';
+export { default as gradeService } from './gradeService';
+export { default as scheduleService } from './scheduleService';
+export { default as announcementService } from './announcementService';
+export { default as reportService } from './reportService';
+export { default as settingsService } from './settingsService';
