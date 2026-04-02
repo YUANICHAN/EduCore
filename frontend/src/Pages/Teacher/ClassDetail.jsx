@@ -16,35 +16,10 @@ import {
   AlertCircle
 } from 'lucide-react';
 import classService from '../../service/classService';
-import studentService from '../../service/studentService';
 import attendanceService from '../../service/attendanceService';
 import gradeService from '../../service/gradeService';
 
-// Fallback data
-const getFallbackClassData = () => ({
-    id: 1,
-    subject: 'Mathematics 101',
-    subjectCode: 'MATH101',
-    section: 'A',
-    schedule: 'MWF 9:00 AM - 10:30 AM',
-    room: 'Room 201',
-    students: 35,
-    academicYear: '2024-2025',
-    semester: '1st Semester',
-    description: 'Introduction to advanced mathematics.'
-});
-
-const getFallbackStudents = () => [
-    { id: 1, name: 'John Smith', studentId: 'STU001', email: 'john.smith@edu.com', status: 'Active' },
-];
-
-const getFallbackAttendance = () => [
-    { date: '2024-01-15', present: 32, absent: 3, late: 0 },
-];
-
-const getFallbackGradeComponents = () => [
-    { component: 'Quiz 1', weight: '10%', status: 'Graded', average: 85 },
-];
+// No fallback data - use real data or empty states
 
 function ClassDetail() {
     const { classId } = useParams();
@@ -57,6 +32,24 @@ function ClassDetail() {
     const [gradeComponents, setGradeComponents] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [exporting, setExporting] = useState(false);
+
+    const resolveImageUrl = (imagePath) => {
+        if (!imagePath) return null;
+        if (/^https?:\/\//i.test(imagePath) || imagePath.startsWith('data:') || imagePath.startsWith('blob:')) {
+            return imagePath;
+        }
+
+        const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api';
+        const backendOrigin = apiBaseUrl.replace(/\/api\/?$/, '');
+        let normalizedPath = imagePath.startsWith('/') ? imagePath.slice(1) : imagePath;
+
+        if (normalizedPath.startsWith('public/')) {
+            normalizedPath = normalizedPath.replace(/^public\//, 'storage/');
+        }
+
+        return `${backendOrigin}/${normalizedPath}`;
+    };
 
     const fetchData = useCallback(async () => {
         setLoading(true);
@@ -65,33 +58,95 @@ function ClassDetail() {
             // Fetch class data
             const classResponse = await classService.getById(classId);
             const cls = classResponse.data || classResponse;
+
+            const safeText = (value, fallback = '') => {
+                if (value === null || value === undefined) return fallback;
+                if (typeof value === 'string' || typeof value === 'number') return String(value);
+                return fallback;
+            };
+
+            const sectionLabel =
+                safeText(cls.section?.section_code)
+                || safeText(cls.section?.name)
+                || safeText(cls.section)
+                || 'A';
+
+            const subjectName =
+                safeText(cls.subject?.subject_name)
+                || safeText(cls.subject?.name)
+                || safeText(cls.name)
+                || 'Class';
+
+            const subjectCode =
+                safeText(cls.subject?.subject_code)
+                || safeText(cls.subject?.code)
+                || safeText(cls.code)
+                || 'N/A';
+
+            const academicYearLabel =
+                safeText(cls.academic_year?.year_code)
+                || safeText(cls.academic_year?.name)
+                || safeText(cls.academicYear)
+                || 'Current';
+
+            const scheduleLabel =
+                safeText(cls.schedule)
+                || (Array.isArray(cls.schedules) && cls.schedules.length > 0
+                    ? `${safeText(cls.schedules[0]?.day_of_week, 'TBD')} ${safeText(cls.schedules[0]?.time_start, '')}${cls.schedules[0]?.time_end ? ` - ${safeText(cls.schedules[0]?.time_end)}` : ''}`.trim()
+                    : '')
+                || `${safeText(cls.days, 'TBD')} ${safeText(cls.time, '')}`.trim();
+
+            const roomLabel =
+                (Array.isArray(cls.schedules) && cls.schedules.length > 0
+                    ? `${safeText(cls.schedules[0]?.building, '')} ${safeText(cls.schedules[0]?.room_number, '')}`.trim()
+                    : '')
+                || safeText(cls.room)
+                || safeText(cls.room_number)
+                || 'TBD';
             
             setClassData({
                 id: cls.id,
-                subject: cls.subject?.name || cls.name || 'Class',
-                subjectCode: cls.subject?.code || cls.code || 'N/A',
-                section: cls.section?.name || cls.section || 'A',
-                schedule: cls.schedule || `${cls.days || 'TBD'} ${cls.time || ''}`,
-                room: cls.room || 'TBD',
-                students: cls.student_count || cls.students || 0,
-                academicYear: cls.academic_year?.name || cls.academicYear || 'Current',
-                semester: cls.semester || '1st Semester',
-                description: cls.description || cls.subject?.description || ''
+                subject: subjectName,
+                subjectCode: subjectCode,
+                section: sectionLabel,
+                schedule: scheduleLabel || 'TBD',
+                room: roomLabel,
+                students: Number(cls.enrolled_students_count ?? cls.enrollments_count ?? cls.student_count ?? cls.students ?? 0),
+                academicYear: academicYearLabel,
+                semester: safeText(cls.semester) || '1st Semester',
+                description: safeText(cls.description) || safeText(cls.subject?.description) || ''
             });
 
-            // Fetch students for this class
+            // Fetch students for this class from DB enrollments endpoint
             try {
-                const studentsResponse = await studentService.getByClass(classId);
-                const studentsData = (studentsResponse.data || studentsResponse || []).map(stu => ({
-                    id: stu.id,
-                    name: `${stu.first_name || ''} ${stu.last_name || ''}`.trim() || stu.name || 'Student',
-                    studentId: stu.student_id || stu.id_number || `STU${String(stu.id).padStart(3, '0')}`,
-                    email: stu.email || 'N/A',
-                    status: stu.status || 'Active'
-                }));
-                setStudents(studentsData.length > 0 ? studentsData : getFallbackStudents());
+                const studentsResponse = await classService.getStudents(classId, {
+                    status: 'enrolled',
+                    per_page: 1000,
+                });
+
+                const enrollmentRows = Array.isArray(studentsResponse?.data)
+                    ? studentsResponse.data
+                    : Array.isArray(studentsResponse)
+                        ? studentsResponse
+                        : [];
+
+                const studentsData = enrollmentRows.map((row) => {
+                    const stu = row.student || row;
+                    return {
+                        id: stu.id || row.id,
+                        name: `${stu.first_name || ''} ${stu.last_name || ''}`.trim() || stu.name || 'Student',
+                        studentId: stu.student_number || stu.student_id || stu.id_number || `STU${String(stu.id || row.id || '').padStart(3, '0')}`,
+                        email: stu.email || 'N/A',
+                        image: stu.profile_image || stu.user?.avatar || null,
+                        status: row.status || stu.account_status || 'Active'
+                    };
+                });
+
+                setStudents(studentsData);
+                setClassData((prev) => prev ? ({ ...prev, students: studentsData.length }) : prev);
             } catch {
-                setStudents(getFallbackStudents());
+                setStudents([]);
+                setClassData((prev) => prev ? ({ ...prev, students: 0 }) : prev);
             }
 
             // Fetch attendance records
@@ -103,9 +158,9 @@ function ClassDetail() {
                     absent: att.absent_count || att.absent || 0,
                     late: att.late_count || att.late || 0
                 }));
-                setAttendanceRecords(attData.length > 0 ? attData : getFallbackAttendance());
+                setAttendanceRecords(attData.length > 0 ? attData : []);
             } catch {
-                setAttendanceRecords(getFallbackAttendance());
+                setAttendanceRecords([]);
             }
 
             // Fetch grade components
@@ -117,18 +172,19 @@ function ClassDetail() {
                     status: grade.status || 'Pending',
                     average: grade.average || null
                 }));
-                setGradeComponents(gradesData.length > 0 ? gradesData : getFallbackGradeComponents());
+                setGradeComponents(gradesData.length > 0 ? gradesData : []);
             } catch {
-                setGradeComponents(getFallbackGradeComponents());
+                setGradeComponents([]);
             }
 
         } catch (err) {
             console.error('Failed to fetch class details:', err);
             setError('Failed to load class details');
-            setClassData(getFallbackClassData());
-            setStudents(getFallbackStudents());
-            setAttendanceRecords(getFallbackAttendance());
-            setGradeComponents(getFallbackGradeComponents());
+            // No fallback - keep empty states
+            setClassData(null);
+            setStudents([]);
+            setAttendanceRecords([]);
+            setGradeComponents([]);
         } finally {
             setLoading(false);
         }
@@ -137,6 +193,34 @@ function ClassDetail() {
     useEffect(() => {
         fetchData();
     }, [fetchData]);
+
+    const handleExportStudents = async () => {
+        setExporting(true);
+        try {
+            const response = await classService.exportStudentsExcel(classId);
+            const blob = new Blob([
+                response.data,
+            ], { type: response.headers['content-type'] || 'application/vnd.ms-excel' });
+
+            const disposition = response.headers['content-disposition'] || '';
+            const filenameMatch = disposition.match(/filename="?([^";]+)"?/i);
+            const filename = filenameMatch?.[1] || `class_${classId}_students.xls`;
+
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.URL.revokeObjectURL(url);
+        } catch (err) {
+            console.error('Failed to export students list:', err);
+            setError('Failed to export students list. Please try again.');
+        } finally {
+            setExporting(false);
+        }
+    };
 
     const tabs = [
         { id: 'students', label: 'Students', icon: Users },
@@ -275,8 +359,12 @@ function ClassDetail() {
                             <div>
                                 <div className="flex justify-between items-center mb-4">
                                     <h2 className="text-lg font-semibold text-gray-900">Enrolled Students</h2>
-                                    <button className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700">
-                                        Export List
+                                    <button
+                                        onClick={handleExportStudents}
+                                        disabled={exporting}
+                                        className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:bg-blue-400 disabled:cursor-not-allowed"
+                                    >
+                                        {exporting ? 'Exporting...' : 'Export List'}
                                     </button>
                                 </div>
                                 <div className="overflow-x-auto">
@@ -293,7 +381,24 @@ function ClassDetail() {
                                             {students.map((student) => (
                                                 <tr key={student.id} className="border-b border-gray-100 hover:bg-gray-50">
                                                     <td className="py-3 px-4 text-sm text-gray-900">{student.studentId}</td>
-                                                    <td className="py-3 px-4 text-sm font-medium text-gray-900">{student.name}</td>
+                                                    <td className="py-3 px-4 text-sm font-medium text-gray-900">
+                                                        <div className="flex items-center gap-3">
+                                                            <div className="w-8 h-8 rounded-full overflow-hidden bg-gray-200 flex items-center justify-center">
+                                                                {resolveImageUrl(student.image) ? (
+                                                                    <img
+                                                                        src={resolveImageUrl(student.image)}
+                                                                        alt={student.name}
+                                                                        className="w-full h-full object-cover"
+                                                                    />
+                                                                ) : (
+                                                                    <span className="text-xs font-semibold text-gray-600">
+                                                                        {(student.name || 'S').slice(0, 1).toUpperCase()}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                            <span>{student.name}</span>
+                                                        </div>
+                                                    </td>
                                                     <td className="py-3 px-4 text-sm text-gray-600">{student.email}</td>
                                                     <td className="py-3 px-4">
                                                         <span className="px-2 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded">
@@ -302,6 +407,13 @@ function ClassDetail() {
                                                     </td>
                                                 </tr>
                                             ))}
+                                            {students.length === 0 && (
+                                                <tr>
+                                                    <td colSpan="4" className="py-6 px-4 text-sm text-gray-500 text-center">
+                                                        No enrolled students found for this class.
+                                                    </td>
+                                                </tr>
+                                            )}
                                         </tbody>
                                     </table>
                                 </div>

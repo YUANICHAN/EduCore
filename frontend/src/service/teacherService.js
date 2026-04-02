@@ -137,10 +137,25 @@ const teacherService = {
    * Unassign a class from a teacher
    * @param {number} teacherId
    * @param {number} classId
+   * @param {Object} options - { cancel_class?: boolean }
    * @returns {Promise}
    */
-  unassignClass: async (teacherId, classId) => {
-    const response = await api.post(`/teachers/${teacherId}/unassign-class`, { class_id: classId });
+  unassignClass: async (teacherId, classId, options = {}) => {
+    const response = await api.post(`/teachers/${teacherId}/unassign-class`, {
+      class_id: classId,
+      ...options,
+    });
+    return response.data;
+  },
+
+  /**
+   * Permanently delete a class assigned to a teacher (guarded by backend checks)
+   * @param {number} teacherId
+   * @param {number} classId
+   * @returns {Promise}
+   */
+  deleteClass: async (teacherId, classId) => {
+    const response = await api.post(`/teachers/${teacherId}/delete-class`, { class_id: classId });
     return response.data;
   },
 

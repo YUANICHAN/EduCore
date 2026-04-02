@@ -12,59 +12,95 @@ import {
   AlertCircle,
   Loader2
 } from 'lucide-react';
-import subjectService from '../../service/subjectService';
-
-// Fallback data
-const getFallbackSubjects = () => [
-  {
-    id: 1,
-    code: 'MATH101',
-    name: 'Mathematics 101',
-    units: 3,
-    classification: 'Major',
-    description: 'Introduction to advanced mathematics.',
-    prerequisites: ['None'],
-    classes: 2
-  },
-];
+import teacherService from '../../service/teacherService';
+import authService from '../../service/authService';
+import academicYearService from '../../service/academicYearService';
 
 function Subjects() {
     const [activeItem, setActiveItem] = useState("Subjects");
-    const [selectedYear, setSelectedYear] = useState('2024-2025');
+    const [selectedYear, setSelectedYear] = useState('');
+    const [academicYears, setAcademicYears] = useState([]);
     const [searchQuery, setSearchQuery] = useState("");
     const [subjects, setSubjects] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const navigate = useNavigate();
 
+    useEffect(() => {
+        const fetchAcademicYears = async () => {
+            try {
+                const response = await academicYearService.getAll();
+                const rows = response.data || response || [];
+                setAcademicYears(rows);
+
+                const current = rows.find((y) => y.is_current) || rows.find((y) => y.status === 'active') || rows[0];
+                if (current) {
+                    setSelectedYear(String(current.id));
+                }
+            } catch {
+                setAcademicYears([]);
+            }
+        };
+
+        fetchAcademicYears();
+    }, []);
+
     const fetchSubjects = useCallback(async () => {
+        if (!selectedYear) return;
+
         setLoading(true);
         setError(null);
         try {
-            const response = await subjectService.getAll();
-            const subjectsData = response.data || response || [];
-            
-            const mapped = subjectsData.map(subj => ({
-                id: subj.id,
-                code: subj.code || 'N/A',
-                name: subj.name || 'Subject',
-                units: subj.units || subj.credit_units || 3,
-                classification: subj.classification || subj.type || 'Major',
-                description: subj.description || 'No description available.',
-                prerequisites: subj.prerequisites || ['None'],
-                syllabus: subj.syllabus || null,
-                classes: subj.classes_count || subj.classes || 0
-            }));
-            
-            setSubjects(mapped.length > 0 ? mapped : getFallbackSubjects());
+            const user = authService.getCurrentUser();
+            if (!user?.teacher_id) {
+                setSubjects([]);
+                setError('Teacher account is not linked to a teacher profile.');
+                return;
+            }
+
+            const response = await teacherService.getClasses(user.teacher_id, {
+                status: 'active',
+                academic_year_id: selectedYear,
+                per_page: 1000,
+            });
+
+            const classRows = Array.isArray(response?.data) ? response.data : [];
+
+            const groupedBySubject = classRows.reduce((acc, cls) => {
+                const subject = cls.subject || {};
+                const subjectId = subject.id || cls.subject_id;
+
+                if (!subjectId) {
+                    return acc;
+                }
+
+                if (!acc[subjectId]) {
+                    acc[subjectId] = {
+                        id: subjectId,
+                        code: subject.subject_code || subject.code || 'N/A',
+                        name: subject.subject_name || subject.name || 'Subject',
+                        units: Number(subject.units || subject.credit_units || 0),
+                        classification: subject.subject_type || subject.classification || 'Major',
+                        description: subject.description || 'No description available.',
+                        prerequisites: Array.isArray(subject.prerequisites) ? subject.prerequisites : (subject.prerequisites ? [String(subject.prerequisites)] : ['None']),
+                        syllabus: subject.syllabus || null,
+                        classes: 0,
+                    };
+                }
+
+                acc[subjectId].classes += 1;
+                return acc;
+            }, {});
+
+            setSubjects(Object.values(groupedBySubject));
         } catch (err) {
             console.error('Failed to fetch subjects:', err);
             setError('Failed to load subjects');
-            setSubjects(getFallbackSubjects());
+            setSubjects([]);
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [selectedYear]);
 
     useEffect(() => {
         fetchSubjects();
@@ -78,7 +114,11 @@ function Subjects() {
     );
 
     const handleViewDetails = (subjectId) => {
-        navigate(`/teacher/subject/${subjectId}`);
+        navigate(`/teacher/subject/${subjectId}`, {
+            state: {
+                academicYearId: selectedYear,
+            },
+        });
     };
 
     return (
@@ -110,9 +150,15 @@ function Subjects() {
                             onChange={(e) => setSelectedYear(e.target.value)}
                             className="appearance-none bg-white border border-gray-300 rounded-lg px-4 py-2 pr-10 text-sm font-medium text-gray-700 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
                         >
-                            <option value="2024-2025">AY 2024-2025</option>
-                            <option value="2023-2024">AY 2023-2024</option>
-                            <option value="2022-2023">AY 2022-2023</option>
+                            {academicYears.length > 0 ? (
+                                academicYears.map((ay) => (
+                                    <option key={ay.id} value={String(ay.id)}>
+                                        AY {ay.year_code || ay.year || `${ay.start_year}-${ay.end_year}`}
+                                    </option>
+                                ))
+                            ) : (
+                                <option value="">AY -</option>
+                            )}
                         </select>
                     </div>
                 </div>

@@ -6,6 +6,7 @@ import sectionService from "../../service/sectionService";
 import classService from "../../service/classService";
 import enrollmentService from "../../service/enrollmentService";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import Swal from 'sweetalert2';
 import {
   Search,
   Plus,
@@ -42,9 +43,11 @@ function Enrollment() {
   // Modal
   const [showEnrollModal, setShowEnrollModal] = useState(false);
   const [selectedStudents, setSelectedStudents] = useState(new Set());
+  const [selectedEnrolledStudents, setSelectedEnrolledStudents] = useState(new Set());
   const [savingEnrollment, setSavingEnrollment] = useState(false);
   const [showBulkEnrollModal, setShowBulkEnrollModal] = useState(false);
   const [bulkEnrolling, setBulkEnrolling] = useState(false);
+  const [bulkRemoving, setBulkRemoving] = useState(false);
 
   // Year level options
   const yearLevels = [1, 2, 3, 4];
@@ -84,7 +87,11 @@ function Enrollment() {
 
   const classesQuery = useQuery({
     queryKey: ['classes', { section_id: selectedSection?.id }],
-    queryFn: () => classService.getAll({ section_id: selectedSection?.id }),
+    queryFn: () => classService.getAll({
+      section_id: selectedSection?.id,
+      status: 'active',
+      assigned_only: true,
+    }),
     enabled: !!selectedSection,
     staleTime: 5 * 60 * 1000,
   });
@@ -162,6 +169,8 @@ function Enrollment() {
   const navigateToStudents = (cls) => {
     setDrillDownLevel("students");
     setSelectedClass(cls);
+    setSelectedStudents(new Set());
+    setSelectedEnrolledStudents(new Set());
   };
 
   const goBack = () => {
@@ -178,6 +187,19 @@ function Enrollment() {
       setDrillDownLevel("classes");
       setSelectedClass(null);
     }
+  };
+
+  const refreshEnrollmentHierarchy = async () => {
+    const queriesToInvalidate = [
+      queryClient.invalidateQueries({ queryKey: ['classStudents', selectedClass?.id] }),
+      queryClient.invalidateQueries({ queryKey: ['sectionStudents', selectedSection?.id] }),
+      queryClient.invalidateQueries({ queryKey: ['classes', { section_id: selectedSection?.id }] }),
+      queryClient.invalidateQueries({
+        queryKey: ['sections', { program_id: selectedProgram?.id, year_level: selectedYear }],
+      }),
+    ];
+
+    await Promise.all(queriesToInvalidate);
   };
 
   const handleEnrollStudents = async () => {
@@ -201,8 +223,14 @@ function Enrollment() {
       setSelectedStudents(new Set());
       setShowEnrollModal(false);
 
-      await queryClient.invalidateQueries({ queryKey: ['classStudents', selectedClass?.id] });
-      await queryClient.invalidateQueries({ queryKey: ['sectionStudents', selectedSection?.id] });
+      await refreshEnrollmentHierarchy();
+
+      await Swal.fire({
+        icon: 'success',
+        title: 'Enrollment Successful',
+        text: `Successfully enrolled ${studentIds.length} student(s) to ${selectedClass.class_code}`,
+        confirmButtonColor: '#2563EB',
+      });
 
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
@@ -215,16 +243,106 @@ function Enrollment() {
   const handleRemoveStudent = async (studentId) => {
     if (!selectedClass) return;
 
+    const targetStudent = enrolledStudents.find((s) => s.id === studentId);
+    const confirmResult = await Swal.fire({
+      icon: 'warning',
+      title: 'Remove Student from Class?',
+      text: `${targetStudent ? `${targetStudent.first_name} ${targetStudent.last_name}` : 'This student'} will be removed from ${selectedClass.class_code}.`,
+      showCancelButton: true,
+      confirmButtonText: 'Yes, Remove',
+      cancelButtonText: 'Cancel',
+      confirmButtonColor: '#DC2626',
+      cancelButtonColor: '#6B7280',
+    });
+
+    if (!confirmResult.isConfirmed) return;
+
     try {
       await enrollmentService.remove(studentId, selectedClass.id);
       setSuccess('Student removed from class');
 
-      await queryClient.invalidateQueries({ queryKey: ['classStudents', selectedClass?.id] });
-      await queryClient.invalidateQueries({ queryKey: ['sectionStudents', selectedSection?.id] });
+      await refreshEnrollmentHierarchy();
+
+      await Swal.fire({
+        icon: 'success',
+        title: 'Removed',
+        text: 'Student has been removed from class.',
+        timer: 1800,
+        showConfirmButton: false,
+      });
 
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
       setError('Failed to remove student');
+    }
+  };
+
+  const handleBulkRemoveStudents = async () => {
+    if (!selectedClass || selectedEnrolledStudents.size === 0) {
+      setError('Please select enrolled students to remove');
+      return;
+    }
+
+    const studentIds = Array.from(selectedEnrolledStudents);
+
+    const confirmResult = await Swal.fire({
+      icon: 'warning',
+      title: 'Bulk Remove Students?',
+      text: `Remove ${studentIds.length} selected student(s) from ${selectedClass.class_code}?`,
+      showCancelButton: true,
+      confirmButtonText: 'Yes, Remove',
+      cancelButtonText: 'Cancel',
+      confirmButtonColor: '#DC2626',
+      cancelButtonColor: '#6B7280',
+    });
+
+    if (!confirmResult.isConfirmed) return;
+
+    setBulkRemoving(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const results = await Promise.allSettled(
+        studentIds.map((studentId) => enrollmentService.remove(studentId, selectedClass.id))
+      );
+
+      const removedCount = results.filter((r) => r.status === 'fulfilled').length;
+      const failedCount = results.length - removedCount;
+
+      if (removedCount > 0) {
+        setSelectedEnrolledStudents(new Set());
+        await refreshEnrollmentHierarchy();
+      }
+
+      if (failedCount === 0) {
+        setSuccess(`Successfully removed ${removedCount} student(s) from class`);
+        await Swal.fire({
+          icon: 'success',
+          title: 'Bulk Remove Successful',
+          text: `Removed ${removedCount} student(s) from ${selectedClass.class_code}.`,
+          confirmButtonColor: '#2563EB',
+        });
+      } else if (removedCount > 0) {
+        setSuccess(`Removed ${removedCount} student(s); failed to remove ${failedCount} student(s)`);
+        await Swal.fire({
+          icon: 'warning',
+          title: 'Partial Completion',
+          text: `Removed ${removedCount} student(s), but ${failedCount} failed.`,
+          confirmButtonColor: '#2563EB',
+        });
+      } else {
+        setError('Failed to remove selected students');
+      }
+
+      setTimeout(() => {
+        setSuccess(null);
+        setError(null);
+      }, 3000);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to remove selected students');
+    } finally {
+      setBulkRemoving(false);
     }
   };
 
@@ -243,6 +361,24 @@ function Enrollment() {
       setSelectedStudents(new Set());
     } else {
       setSelectedStudents(new Set(availableStudents.map(s => s.id)));
+    }
+  };
+
+  const toggleEnrolledStudentSelection = (studentId) => {
+    const newSet = new Set(selectedEnrolledStudents);
+    if (newSet.has(studentId)) {
+      newSet.delete(studentId);
+    } else {
+      newSet.add(studentId);
+    }
+    setSelectedEnrolledStudents(newSet);
+  };
+
+  const selectAllEnrolledStudents = () => {
+    if (selectedEnrolledStudents.size === enrolledStudents.length) {
+      setSelectedEnrolledStudents(new Set());
+    } else {
+      setSelectedEnrolledStudents(new Set(enrolledStudents.map((s) => s.id)));
     }
   };
 
@@ -273,8 +409,7 @@ function Enrollment() {
       setSuccess(`Successfully enrolled ${studentsToEnroll.length} student(s) from section`);
       setShowBulkEnrollModal(false);
 
-      await queryClient.invalidateQueries({ queryKey: ['classStudents', selectedClass?.id] });
-      await queryClient.invalidateQueries({ queryKey: ['sectionStudents', selectedSection?.id] });
+      await refreshEnrollmentHierarchy();
 
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
@@ -320,49 +455,78 @@ function Enrollment() {
           </div>
 
           {/* Breadcrumbs */}
-          <div className="flex items-center space-x-2 text-sm">
-            <button
-              onClick={() => {
-                setDrillDownLevel("programs");
-                setSelectedProgram(null);
-                setSelectedYear(null);
-                setSelectedSection(null);
-                setSelectedClass(null);
-              }}
-              className="text-blue-600 hover:text-blue-700 hover:underline font-medium"
-            >
-              Enrollment
-            </button>
+          <div className="flex items-center text-sm text-gray-500 mb-1 flex-wrap gap-y-1">
+            <span>Admin</span>
+            <ChevronRight className="w-4 h-4 mx-1" />
+            {drillDownLevel === "programs" ? (
+              <span className="text-gray-900 font-medium">Enrollment</span>
+            ) : (
+              <button
+                onClick={() => {
+                  setDrillDownLevel("programs");
+                  setSelectedProgram(null);
+                  setSelectedYear(null);
+                  setSelectedSection(null);
+                  setSelectedClass(null);
+                }}
+                className="hover:text-blue-600 transition-colors"
+              >
+                Enrollment
+              </button>
+            )}
+
             {selectedProgram && (
               <>
-                <ChevronRight className="w-4 h-4 text-gray-400" />
-                <span className="px-3 py-1.5 bg-blue-100 text-blue-700 font-semibold rounded-lg">
-                  {selectedProgram.program_name}
-                </span>
+                <ChevronRight className="w-4 h-4 mx-1" />
+                {drillDownLevel === "years" ? (
+                  <span className="text-gray-900 font-medium">{selectedProgram.program_name}</span>
+                ) : (
+                  <button
+                    onClick={() => navigateToYears(selectedProgram)}
+                    className="hover:text-blue-600 transition-colors"
+                  >
+                    {selectedProgram.program_name}
+                  </button>
+                )}
               </>
             )}
+
             {selectedYear && (
               <>
-                <ChevronRight className="w-4 h-4 text-gray-400" />
-                <span className="px-3 py-1.5 bg-purple-100 text-purple-700 font-semibold rounded-lg">
-                  Year {selectedYear}
-                </span>
+                <ChevronRight className="w-4 h-4 mx-1" />
+                {drillDownLevel === "sections" ? (
+                  <span className="text-gray-900 font-medium">Year {selectedYear}</span>
+                ) : (
+                  <button
+                    onClick={() => navigateToSections(selectedYear)}
+                    className="hover:text-blue-600 transition-colors"
+                  >
+                    Year {selectedYear}
+                  </button>
+                )}
               </>
             )}
+
             {selectedSection && (
               <>
-                <ChevronRight className="w-4 h-4 text-gray-400" />
-                <span className="px-3 py-1.5 bg-green-100 text-green-700 font-semibold rounded-lg">
-                  {selectedSection.section_code}
-                </span>
+                <ChevronRight className="w-4 h-4 mx-1" />
+                {drillDownLevel === "classes" ? (
+                  <span className="text-gray-900 font-medium">{selectedSection.section_code}</span>
+                ) : (
+                  <button
+                    onClick={() => navigateToClasses(selectedSection)}
+                    className="hover:text-blue-600 transition-colors"
+                  >
+                    {selectedSection.section_code}
+                  </button>
+                )}
               </>
             )}
+
             {selectedClass && (
               <>
-                <ChevronRight className="w-4 h-4 text-gray-400" />
-                <span className="px-3 py-1.5 bg-orange-100 text-orange-700 font-semibold rounded-lg">
-                  {selectedClass.class_code}
-                </span>
+                <ChevronRight className="w-4 h-4 mx-1" />
+                <span className="text-gray-900 font-medium">{selectedClass.class_code}</span>
               </>
             )}
           </div>
@@ -511,6 +675,11 @@ function Enrollment() {
                     </h2>
                     <span className="text-sm text-gray-600">{classes.length} classes available</span>
                   </div>
+                  {classes.length === 0 && (
+                    <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                      No active classes with assigned teachers in this section.
+                    </div>
+                  )}
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     {classes.map((cls) => (
                       <button
@@ -658,22 +827,62 @@ function Enrollment() {
 
                     {/* Enrolled Students */}
                     <div className="bg-white rounded-lg border border-gray-200 p-6">
-                      <h3 className="text-lg font-semibold text-gray-900 mb-4">
-                        Enrolled Students ({enrolledStudents.length})
-                      </h3>
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-semibold text-gray-900">
+                          Enrolled Students ({enrolledStudents.length})
+                        </h3>
+                        {enrolledStudents.length > 0 && (
+                          <button
+                            onClick={selectAllEnrolledStudents}
+                            className="text-sm text-blue-600 hover:text-blue-700"
+                          >
+                            {selectedEnrolledStudents.size === enrolledStudents.length ? 'Deselect All' : 'Select All'}
+                          </button>
+                        )}
+                      </div>
+
+                      {selectedEnrolledStudents.size > 0 && (
+                        <button
+                          onClick={handleBulkRemoveStudents}
+                          disabled={bulkRemoving}
+                          className="w-full mb-4 bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 disabled:opacity-50 flex items-center justify-center space-x-2"
+                        >
+                          {bulkRemoving ? (
+                            <>
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                              <span>Removing...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Trash2 className="w-4 h-4" />
+                              <span>Remove Selected ({selectedEnrolledStudents.size})</span>
+                            </>
+                          )}
+                        </button>
+                      )}
+
                       <div className="space-y-2 max-h-96 overflow-y-auto">
                         {enrolledStudents.length === 0 ? (
                           <p className="text-gray-500 text-sm text-center py-4">No enrolled students</p>
                         ) : (
                           enrolledStudents.map((student) => (
                             <div key={student.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                              <div>
-                                <p className="font-medium text-gray-900">{student.first_name} {student.last_name}</p>
-                                <p className="text-sm text-gray-600">{student.student_number}</p>
+                              <div className="flex items-center space-x-3">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedEnrolledStudents.has(student.id)}
+                                  onChange={() => toggleEnrolledStudentSelection(student.id)}
+                                  className="w-4 h-4 rounded border-gray-300"
+                                />
+                                <div>
+                                  <p className="font-medium text-gray-900">{student.first_name} {student.last_name}</p>
+                                  <p className="text-sm text-gray-600">{student.student_number}</p>
+                                </div>
                               </div>
                               <button
                                 onClick={() => handleRemoveStudent(student.id)}
                                 className="text-red-600 hover:text-red-700 p-2"
+                                title="Remove student"
                               >
                                 <Trash2 className="w-4 h-4" />
                               </button>

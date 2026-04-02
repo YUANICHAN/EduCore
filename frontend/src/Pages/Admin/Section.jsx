@@ -1,4 +1,4 @@
-import '../../App.css';
+﻿import '../../App.css';
 import { useMemo, useState } from "react";
 import Sidebar from "../../Components/Admin/Sidebar.jsx";
 import sectionService from "../../service/sectionService";
@@ -19,15 +19,25 @@ import {
   Gauge,
   List,
   ChevronRight,
-  Home,
-  GraduationCap,
-  Loader2,
   AlertCircle,
   X,
   Trash2,
 } from "lucide-react";
 
 function Section() {
+  const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api';
+  const backendOrigin = apiBaseUrl.replace(/\/api\/?$/, '');
+  const fallbackProgramImage = 'https://images.unsplash.com/photo-1513258496099-48168024aec0?w=500&q=80';
+
+  const resolveImageUrl = (imagePath) => {
+    if (!imagePath) return null;
+    if (/^https?:\/\//i.test(imagePath) || imagePath.startsWith('data:') || imagePath.startsWith('blob:')) {
+      return imagePath;
+    }
+    const normalizedPath = imagePath.startsWith('/') ? imagePath.slice(1) : imagePath;
+    return `${backendOrigin}/${normalizedPath}`;
+  };
+
   const [activeItem, setActiveItem] = useState("Sections");
   const [searchTerm, setSearchTerm] = useState("");
   const queryClient = useQueryClient();
@@ -99,13 +109,14 @@ function Section() {
       id: p.id,
       code: p.code || p.program_code || '',
       name: p.name || p.program_name || '',
-      color: ['blue', 'green', 'purple', 'orange', 'red'][p.id % 5] || 'blue',
+      image: resolveImageUrl(p.program_image || p.image) || fallbackProgramImage,
+      rawImage: p.program_image || p.image || null,
     }));
 
     return mapped.length > 0 ? mapped : [
-      { code: "BSIT", name: "Bachelor of Science in Information Technology", color: "blue" },
-      { code: "BSBA", name: "Bachelor of Science in Business Administration", color: "green" },
-      { code: "BSHM", name: "Bachelor of Science in Hospitality Management", color: "purple" },
+      { code: "BSIT", name: "Bachelor of Science in Information Technology", image: fallbackProgramImage, rawImage: null },
+      { code: "BSBA", name: "Bachelor of Science in Business Administration", image: fallbackProgramImage, rawImage: null },
+      { code: "BSHM", name: "Bachelor of Science in Hospitality Management", image: fallbackProgramImage, rawImage: null },
     ];
   }, [programsQuery.data]);
 
@@ -304,42 +315,36 @@ function Section() {
           </div>
 
           {/* Breadcrumb Navigation */}
-          <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-4">
-            <div className="flex items-center space-x-2 text-sm flex-wrap">
-              <button
-                onClick={navigateToPrograms}
-                className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg transition-colors ${
-                  drillDownLevel === "programs"
-                    ? "bg-blue-100 text-blue-700 font-semibold"
-                    : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-                }`}
-              >
-                <Home className="w-4 h-4" />
-                <span>Sections</span>
-              </button>
+          <div className="mb-1">
+            <div className="flex items-center text-sm text-gray-500 flex-wrap gap-y-1">
+              <span>Admin</span>
+              <ChevronRight className="w-4 h-4 mx-1" />
+              {drillDownLevel === "programs" ? (
+                <span className="text-gray-900 font-medium">Sections</span>
+              ) : (
+                <button onClick={navigateToPrograms} className="hover:text-blue-600 transition-colors">Sections</button>
+              )}
 
               {selectedCourse && (
                 <>
-                  <ChevronRight className="w-4 h-4 text-gray-400" />
-                  <button
-                    onClick={() => navigateToYears(selectedCourse)}
-                    className={`px-3 py-1.5 rounded-lg transition-colors ${
-                      drillDownLevel === "years"
-                        ? "bg-blue-100 text-blue-700 font-semibold"
-                        : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-                    }`}
-                  >
-                    {selectedCourse}
-                  </button>
+                  <ChevronRight className="w-4 h-4 mx-1" />
+                  {drillDownLevel === "years" ? (
+                    <span className="text-gray-900 font-medium">{selectedCourse}</span>
+                  ) : (
+                    <button
+                      onClick={() => navigateToYears(selectedCourse)}
+                      className="hover:text-blue-600 transition-colors"
+                    >
+                      {selectedCourse}
+                    </button>
+                  )}
                 </>
               )}
 
               {selectedYear && (
                 <>
-                  <ChevronRight className="w-4 h-4 text-gray-400" />
-                  <span className="px-3 py-1.5 bg-blue-100 text-blue-700 font-semibold rounded-lg">
-                    {selectedYear}
-                  </span>
+                  <ChevronRight className="w-4 h-4 mx-1" />
+                  <span className="text-gray-900 font-medium">{selectedYear}</span>
                 </>
               )}
             </div>
@@ -362,8 +367,16 @@ function Section() {
                       className="bg-white rounded-lg border border-gray-200 shadow-sm p-6 hover:shadow-lg hover:border-blue-300 transition-all text-left group"
                     >
                       <div className="flex items-start justify-between mb-4">
-                        <div className={`w-12 h-12 bg-${course.color}-100 rounded-lg flex items-center justify-center group-hover:bg-${course.color}-200 transition-colors`}>
-                          <GraduationCap className={`w-6 h-6 text-${course.color}-600`} />
+                        <div className="w-14 h-14 rounded-lg overflow-hidden bg-gray-100 border border-gray-200">
+                          <img
+                            src={course.image || fallbackProgramImage}
+                            alt={course.name || course.code}
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              e.currentTarget.onerror = null;
+                              e.currentTarget.src = fallbackProgramImage;
+                            }}
+                          />
                         </div>
                         <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-blue-600 transition-colors" />
                       </div>
@@ -516,12 +529,12 @@ function Section() {
                       </p>
                       <p className="text-sm text-gray-600 flex items-center mt-1">
                         <Calendar className="w-4 h-4 text-gray-400 mr-2" />
-                        {sec.yearLevel} · {sec.academicYear}
+                        {sec.yearLevel} - {sec.academicYear}
                       </p>
                     </div>
                     <div className="flex space-x-2">
-                      <button className="text-gray-500 hover:text-blue-600"><Edit className="w-4 h-4" /></button>
-                      <button className="text-gray-500 hover:text-red-600"><Archive className="w-4 h-4" /></button>
+                      <button className="inline-flex items-center justify-center p-1.5 rounded-md text-blue-600 hover:text-blue-700 hover:bg-blue-50 transition-colors"><Edit className="w-4 h-4" /></button>
+                      <button className="inline-flex items-center justify-center p-1.5 rounded-md text-red-600 hover:text-red-700 hover:bg-red-50 transition-colors"><Trash2 className="w-4 h-4" /></button>
                     </div>
                   </div>
 
@@ -546,7 +559,7 @@ function Section() {
                         {sec.subjectTeachers.map((st, idx) => (
                           <div key={idx} className="flex items-center justify-between text-xs bg-gray-50 border border-gray-200 rounded px-2 py-1">
                             <span className="text-gray-700">{st.subject}</span>
-                            <span className="text-gray-600">{st.teacher} · {st.hoursPerWeek} hrs/wk</span>
+                            <span className="text-gray-600">{st.teacher} - {st.hoursPerWeek} hrs/wk</span>
                           </div>
                         ))}
                       </div>
@@ -573,21 +586,21 @@ function Section() {
                   {filteredSections.map((sec) => (
                     <tr key={sec.id} className="hover:bg-gray-50">
                       <td className="px-4 py-3 text-sm font-semibold text-gray-900">{sec.name}</td>
-                      <td className="px-4 py-3 text-sm text-gray-700">{sec.course} · {sec.yearLevel}</td>
-                      <td className="px-4 py-3 text-sm text-gray-700">{sec.semester} · {sec.academicYear}</td>
+                      <td className="px-4 py-3 text-sm text-gray-700">{sec.course} - {sec.yearLevel}</td>
+                      <td className="px-4 py-3 text-sm text-gray-700">{sec.semester} - {sec.academicYear}</td>
                       <td className="px-4 py-3 text-sm text-gray-700">{sec.students}/{sec.capacity}</td>
                       <td className="px-4 py-3 text-sm text-gray-700">{sec.adviser}</td>
                       <td className="px-4 py-3 text-xs text-gray-700 space-y-1">
                         {sec.subjectTeachers.map((st, idx) => (
                           <div key={idx} className="flex justify-between">
                             <span>{st.subject}</span>
-                            <span>{st.teacher} · {st.hoursPerWeek} hrs/wk</span>
+                            <span>{st.teacher} - {st.hoursPerWeek} hrs/wk</span>
                           </div>
                         ))}
                       </td>
                       <td className="px-4 py-3 text-right space-x-2">
-                        <button onClick={() => openEditModal(sec)} className="text-gray-500 hover:text-blue-600"><Edit className="w-4 h-4" /></button>
-                        <button onClick={() => openDeleteModal(sec)} className="text-gray-500 hover:text-red-600"><Trash2 className="w-4 h-4" /></button>
+                        <button onClick={() => openEditModal(sec)} className="inline-flex items-center justify-center p-1.5 rounded-md text-blue-600 hover:text-blue-700 hover:bg-blue-50 transition-colors"><Edit className="w-4 h-4" /></button>
+                        <button onClick={() => openDeleteModal(sec)} className="inline-flex items-center justify-center p-1.5 rounded-md text-red-600 hover:text-red-700 hover:bg-red-50 transition-colors"><Trash2 className="w-4 h-4" /></button>
                       </td>
                     </tr>
                   ))}
@@ -812,3 +825,5 @@ function DeleteConfirmModal({ section, onConfirm, onClose, saving }) {
 }
 
 export default Section;
+
+

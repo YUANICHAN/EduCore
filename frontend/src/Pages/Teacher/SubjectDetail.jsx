@@ -1,6 +1,6 @@
 import '../../App.css'
 import { useState, useEffect, useCallback } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import Sidebar from "../../Components/Teacher/Sidebar.jsx";
 import { 
   Library, 
@@ -11,26 +11,15 @@ import {
   Loader2
 } from 'lucide-react';
 import subjectService from '../../service/subjectService';
+import teacherService from '../../service/teacherService';
+import authService from '../../service/authService';
 
-// Fallback data
-const getFallbackSubject = () => ({
-    id: 1,
-    code: 'MATH101',
-    name: 'Mathematics 101',
-    units: 3,
-    classification: 'Major',
-    description: 'Introduction to advanced mathematics.',
-    prerequisites: ['None'],
-    syllabus: {
-        objectives: ['Understand fundamental concepts'],
-        topics: [{ week: 1, topic: 'Introduction' }]
-    },
-    classes: 2
-});
+// No fallback data - use real data only
 
 function SubjectDetail() {
     const { subjectId } = useParams();
     const navigate = useNavigate();
+    const location = useLocation();
     const [activeItem, setActiveItem] = useState("Subjects");
     const [subject, setSubject] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -42,25 +31,84 @@ function SubjectDetail() {
         try {
             const response = await subjectService.getById(subjectId);
             const subj = response.data || response;
+
+            const safeText = (value, fallback = '') => {
+                if (value === null || value === undefined) return fallback;
+                if (typeof value === 'string' || typeof value === 'number') return String(value);
+                return fallback;
+            };
+
+            const normalizePrerequisites = (value) => {
+                if (Array.isArray(value)) {
+                    return value.length > 0 ? value.map((item) => safeText(item, 'None')).filter(Boolean) : ['None'];
+                }
+                if (value && typeof value === 'string') {
+                    return [value];
+                }
+                return ['None'];
+            };
+
+            let classesCount =
+                typeof subj.classes_count === 'number'
+                    ? subj.classes_count
+                    : Array.isArray(subj.classes)
+                        ? subj.classes.length
+                        : typeof subj.classes === 'number'
+                            ? subj.classes
+                            : 0;
+
+            const currentUser = authService.getCurrentUser();
+            const selectedAcademicYearId = location.state?.academicYearId;
+
+            if (currentUser?.teacher_id) {
+                try {
+                    const teacherClassesRes = await teacherService.getClasses(currentUser.teacher_id, {
+                        status: 'active',
+                        subject_id: subjectId,
+                        ...(selectedAcademicYearId ? { academic_year_id: selectedAcademicYearId } : {}),
+                        per_page: 1000,
+                    });
+
+                    const teacherClasses = Array.isArray(teacherClassesRes?.data)
+                        ? teacherClassesRes.data
+                        : [];
+
+                    classesCount = teacherClasses.length;
+                } catch {
+                    // Keep previously computed classes count if teacher-specific request fails.
+                }
+            }
+
+            const syllabusObjectives = Array.isArray(subj.syllabus?.objectives)
+                ? subj.syllabus.objectives.map((objective) => safeText(objective, '')).filter(Boolean)
+                : Array.isArray(subj.objectives)
+                    ? subj.objectives.map((objective) => safeText(objective, '')).filter(Boolean)
+                    : ['To be defined'];
+
+            const syllabusTopics = Array.isArray(subj.syllabus?.topics)
+                ? subj.syllabus.topics
+                : Array.isArray(subj.topics)
+                    ? subj.topics
+                    : [{ week: 1, topic: 'Introduction' }];
             
             setSubject({
                 id: subj.id,
-                code: subj.code || 'N/A',
-                name: subj.name || 'Subject',
+                code: safeText(subj.subject_code) || safeText(subj.code) || 'N/A',
+                name: safeText(subj.subject_name) || safeText(subj.name) || 'Subject',
                 units: subj.units || subj.credit_units || 3,
-                classification: subj.classification || subj.type || 'Major',
-                description: subj.description || 'No description available.',
-                prerequisites: subj.prerequisites || ['None'],
-                syllabus: subj.syllabus || {
-                    objectives: subj.objectives || ['To be defined'],
-                    topics: subj.topics || [{ week: 1, topic: 'Introduction' }]
+                classification: safeText(subj.subject_type) || safeText(subj.classification) || safeText(subj.type) || 'Major',
+                description: safeText(subj.description) || 'No description available.',
+                prerequisites: normalizePrerequisites(subj.prerequisites),
+                syllabus: {
+                    objectives: syllabusObjectives,
+                    topics: syllabusTopics,
                 },
-                classes: subj.classes_count || subj.classes || 0
+                classes: classesCount,
             });
         } catch (err) {
             console.error('Failed to fetch subject:', err);
             setError('Failed to load subject details');
-            setSubject(getFallbackSubject());
+            // Keep null if fetch fails
         } finally {
             setLoading(false);
         }
@@ -179,37 +227,6 @@ function SubjectDetail() {
                             <p className="text-gray-700 leading-relaxed">{subject.description}</p>
                         </div>
 
-                        {/* Learning Objectives */}
-                        <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6">
-                            <h2 className="text-lg font-semibold text-gray-900 mb-3">Learning Objectives</h2>
-                            <ul className="space-y-2">
-                                {subject.syllabus.objectives.map((objective, index) => (
-                                    <li key={index} className="flex items-start gap-2">
-                                        <span className="shrink-0 w-6 h-6 bg-blue-100 text-blue-700 rounded-full flex items-center justify-center text-xs font-semibold mt-0.5">
-                                            {index + 1}
-                                        </span>
-                                        <span className="text-gray-700">{objective}</span>
-                                    </li>
-                                ))}
-                            </ul>
-                        </div>
-
-                        {/* Course Outline */}
-                        <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6">
-                            <h2 className="text-lg font-semibold text-gray-900 mb-4">Course Outline</h2>
-                            <div className="space-y-2">
-                                {subject.syllabus.topics.map((topic, index) => (
-                                    <div key={index} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
-                                        <div className="shrink-0 w-16 text-center">
-                                            <span className="text-sm font-semibold text-blue-600">Week {topic.week}</span>
-                                        </div>
-                                        <div className="flex-1">
-                                            <p className="text-sm font-medium text-gray-900">{topic.topic}</p>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
                     </div>
 
                     {/* Sidebar */}

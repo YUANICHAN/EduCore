@@ -59,13 +59,14 @@ Route::get('/user', function (Request $request) {
 Route::post('/auth/logout', [AuthController::class, 'logout'])->middleware('auth:sanctum');
 Route::get('/auth/profile', [AuthController::class, 'profile'])->middleware('auth:sanctum');
 Route::put('/auth/profile', [AuthController::class, 'updateProfile'])->middleware('auth:sanctum');
+Route::post('/auth/profile', [AuthController::class, 'updateProfile'])->middleware('auth:sanctum');
 Route::put('/auth/password', [AuthController::class, 'updatePassword'])->middleware('auth:sanctum');
 Route::post('/auth/refresh', [AuthController::class, 'refresh'])->middleware('auth:sanctum');
 
 // Dashboard (public for now)
 Route::get('/dashboard/admin', [DashboardController::class, 'admin']);
-Route::get('/dashboard/teacher', [DashboardController::class, 'teacher']);
-Route::get('/dashboard/student', [DashboardController::class, 'student']);
+Route::get('/dashboard/teacher', [DashboardController::class, 'teacher'])->middleware('auth:sanctum');
+Route::get('/dashboard/student', [DashboardController::class, 'student'])->middleware('auth:sanctum');
 
 // Users Management
 Route::get('/users/statistics', [UserController::class, 'statistics']);
@@ -126,6 +127,7 @@ Route::get('teachers/{teacher}/workload', [TeachersController::class, 'workload'
 Route::post('teachers/{teacher}/assign-class', [TeachersController::class, 'assignClass']);
 Route::post('teachers/{teacher}/create-and-assign', [TeachersController::class, 'createAndAssignClass']);
 Route::post('teachers/{teacher}/unassign-class', [TeachersController::class, 'unassignClass']);
+Route::post('teachers/{teacher}/delete-class', [TeachersController::class, 'deleteClass']);
 Route::post('teachers/{teacher}/bulk-assign', [TeachersController::class, 'bulkAssignClasses']);
 Route::post('teachers/{teacher}/check-conflicts', [TeachersController::class, 'checkWorkloadConflicts']);
 Route::apiResource('teachers', TeachersController::class);
@@ -136,6 +138,7 @@ Route::apiResource('subjects', SubjectController::class);
 
 // Classes
 Route::get('classes/{class}/students', [ClassesController::class, 'students']);
+Route::get('classes/{class}/students/export-excel', [ClassesController::class, 'exportStudentsExcel']);
 Route::get('classes/{class}/schedule', [ClassesController::class, 'schedule']);
 Route::get('classes/{class}/attendance', [ClassesController::class, 'attendance']);
 Route::get('classes/{class}/grades', [ClassesController::class, 'grades']);
@@ -185,5 +188,6 @@ Route::post('reports/generate/grade', [ReportController::class, 'generateGradeRe
 Route::post('reports/generate/attendance', [ReportController::class, 'generateAttendanceReport']);
 Route::post('reports/generate/class', [ReportController::class, 'generateClassReport']);
 Route::post('reports/generate/performance', [ReportController::class, 'generatePerformanceReport']);
+Route::post('reports/export/{format}', [ReportController::class, 'export']);
 Route::get('reports/student/{student}', [ReportController::class, 'byStudent']);
 Route::apiResource('reports', ReportController::class);

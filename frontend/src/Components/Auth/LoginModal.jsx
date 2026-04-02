@@ -115,9 +115,12 @@ function LoginModal({ isOpen, onClose, initialError = '', returnUrl = '' }) {
         const status = err.response.status;
         const data = err.response.data;
         console.error('Status:', status, 'Data:', data);
+        const firstValidationError = data?.errors
+          ? Object.values(data.errors).flat()[0]
+          : null;
 
         if (status === 401 || status === 422) {
-          setError(data.message || 'Invalid email or password. Please try again.');
+          setError(firstValidationError || data.message || 'Invalid email or password. Please try again.');
         } else if (status === 429) {
           setError('Too many login attempts. Please try again later.');
         } else if (status === 403) {

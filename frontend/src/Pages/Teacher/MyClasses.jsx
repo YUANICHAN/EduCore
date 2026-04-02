@@ -15,65 +15,9 @@ import {
 } from 'lucide-react';
 import classService from '../../service/classService';
 import academicYearService from '../../service/academicYearService';
+import authService from '../../service/authService';
 
-// Fallback data for development/demo
-const getFallbackClasses = () => [
-    {
-        id: 1,
-        subject: 'Mathematics 101',
-        subjectCode: 'MATH101',
-        section: 'A',
-        schedule: 'MWF 9:00 AM - 10:30 AM',
-        room: 'Room 201',
-        students: 35,
-        academicYear: '2024-2025',
-        semester: '1st Semester'
-    },
-    {
-        id: 2,
-        subject: 'Physics Laboratory',
-        subjectCode: 'PHYS102',
-        section: 'B',
-        schedule: 'TTH 11:00 AM - 1:00 PM',
-        room: 'Lab 3',
-        students: 28,
-        academicYear: '2024-2025',
-        semester: '1st Semester'
-    },
-    {
-        id: 3,
-        subject: 'Chemistry Lecture',
-        subjectCode: 'CHEM101',
-        section: 'A',
-        schedule: 'MWF 1:00 PM - 2:30 PM',
-        room: 'Room 305',
-        students: 42,
-        academicYear: '2024-2025',
-        semester: '1st Semester'
-    },
-    {
-        id: 4,
-        subject: 'Biology Discussion',
-        subjectCode: 'BIO101',
-        section: 'C',
-        schedule: 'TTH 3:00 PM - 4:30 PM',
-        room: 'Room 102',
-        students: 30,
-        academicYear: '2024-2025',
-        semester: '1st Semester'
-    },
-    {
-        id: 5,
-        subject: 'Advanced Mathematics',
-        subjectCode: 'MATH201',
-        section: 'A',
-        schedule: 'MWF 10:30 AM - 12:00 PM',
-        room: 'Room 203',
-        students: 25,
-        academicYear: '2024-2025',
-        semester: '1st Semester'
-    },
-];
+// No fallback data - use real data only
 
 function MyClasses() {
     const [activeItem, setActiveItem] = useState("My Classes");
@@ -85,6 +29,19 @@ function MyClasses() {
     const [error, setError] = useState(null);
     const navigate = useNavigate();
 
+    const resolveImageUrl = (imagePath) => {
+        if (!imagePath) return null;
+        if (/^https?:\/\//i.test(imagePath) || imagePath.startsWith('data:') || imagePath.startsWith('blob:')) {
+            return imagePath;
+        }
+
+        const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api';
+        const backendOrigin = apiBaseUrl.replace(/\/api\/?$/, '');
+        const normalizedPath = imagePath.startsWith('/') ? imagePath.slice(1) : imagePath;
+
+        return `${backendOrigin}/${normalizedPath}`;
+    };
+
     const fetchData = useCallback(async () => {
         setLoading(true);
         setError(null);
@@ -95,36 +52,59 @@ function MyClasses() {
             setAcademicYears(years);
             
             // Set current academic year
-            const activeYear = years.find(y => y.is_active || y.status === 'active');
+            const activeYear = years.find(y => y.is_current || y.is_active || y.status === 'active');
             if (activeYear && !selectedYear) {
-                setSelectedYear(`${activeYear.start_year}-${activeYear.end_year}`);
+                setSelectedYear(String(activeYear.id));
             }
+
+            const teacherId = authService.getCurrentUser()?.teacher_id;
+            const academicYearId = selectedYear || (activeYear ? String(activeYear.id) : '');
             
             // Fetch classes
-            const classResponse = await classService.getAll();
-            const classData = classResponse.data || classResponse || [];
+            const classResponse = await classService.getAll({
+                per_page: 1000,
+                status: 'active',
+                ...(teacherId ? { teacher_id: teacherId } : {}),
+                ...(academicYearId ? { academic_year_id: academicYearId } : {}),
+            });
+            const classData = Array.isArray(classResponse?.data)
+                ? classResponse.data
+                : Array.isArray(classResponse)
+                    ? classResponse
+                    : [];
             
             // Map API response to component format
             const mappedClasses = classData.map(cls => ({
                 id: cls.id,
-                subject: cls.subject?.name || cls.subject_name || 'Unknown Subject',
-                subjectCode: cls.subject?.code || cls.subject_code || 'N/A',
-                section: cls.section?.name || cls.section_name || 'A',
-                schedule: cls.schedule || cls.time_slot || 'TBA',
-                room: cls.room || cls.room_number || 'TBA',
-                students: cls.students_count || cls.enrolled_count || cls.students?.length || 0,
-                academicYear: cls.academic_year?.name 
-                    || (cls.academic_year ? `${cls.academic_year.start_year}-${cls.academic_year.end_year}` : null)
-                    || '2024-2025',
-                semester: cls.semester || cls.academic_year?.semester || '1st Semester'
+                subject: cls.subject?.subject_name || cls.subject?.name || cls.subject_name || 'Unknown Subject',
+                subjectCode: cls.subject?.subject_code || cls.subject?.code || cls.subject_code || 'N/A',
+                section: cls.section?.section_code || cls.section?.name || cls.section_name || 'N/A',
+                yearLevel: cls.section?.grade_level || cls.subject?.grade_level || 'N/A',
+                subjectImage: cls.subject?.subject_image || cls.subject?.program?.program_image || null,
+                schedule: (cls.schedules?.[0]
+                    ? `${cls.schedules[0].day_of_week || 'TBA'} ${cls.schedules[0].time_start || ''}${cls.schedules[0].time_end ? ` - ${cls.schedules[0].time_end}` : ''}`.trim()
+                    : null)
+                    || cls.schedule
+                    || cls.time_slot
+                    || 'TBA',
+                room: cls.schedules?.[0]?.room || cls.room || cls.room_number || cls.section?.room_number || 'TBA',
+                students: cls.enrolled_students_count ?? cls.enrollments_count ?? cls.students_count ?? cls.enrolled_count ?? cls.students?.length ?? 0,
+                academicYear: cls.academic_year?.year_code
+                    || cls.academicYear?.year_code
+                    || cls.academic_year?.name
+                    || cls.academicYear?.name
+                    || 'N/A',
+                semester: cls.subject?.semester
+                    ? `${cls.subject.semester}${cls.subject.semester === 'summer' ? '' : ' Semester'}`
+                    : (cls.semester || cls.academic_year?.semester || 'N/A')
             }));
             
-            setClasses(mappedClasses.length > 0 ? mappedClasses : getFallbackClasses());
+            setClasses(mappedClasses);
         } catch (err) {
             console.error('Failed to fetch classes:', err);
             setError('Failed to load classes');
-            setClasses(getFallbackClasses());
-            setAcademicYears([{ id: 1, start_year: 2024, end_year: 2025 }]);
+            setClasses([]);
+            setAcademicYears([]);
         } finally {
             setLoading(false);
         }
@@ -136,9 +116,9 @@ function MyClasses() {
 
     // Filter classes based on search query
     const filteredClasses = classes.filter(classItem => 
-        classItem.subject.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        classItem.subjectCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        classItem.section.toLowerCase().includes(searchQuery.toLowerCase())
+        (classItem.subject || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (classItem.subjectCode || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (classItem.section || '').toLowerCase().includes(searchQuery.toLowerCase())
     );
 
     const handleEnterClass = (classId) => {
@@ -176,12 +156,12 @@ function MyClasses() {
                             >
                                 {academicYears.length > 0 ? (
                                     academicYears.map(ay => (
-                                        <option key={ay.id} value={`${ay.start_year}-${ay.end_year}`}>
-                                            AY {ay.start_year}-{ay.end_year}
+                                        <option key={ay.id} value={String(ay.id)}>
+                                            AY {ay.year_code || ay.year || `${ay.start_year}-${ay.end_year}`}
                                         </option>
                                     ))
                                 ) : (
-                                    <option value="2024-2025">AY 2024-2025</option>
+                                    <option value="">AY -</option>
                                 )}
                             </select>
                         </div>
@@ -226,7 +206,7 @@ function MyClasses() {
                     <div className="bg-white p-5 rounded-lg border border-gray-200 shadow-sm">
                         <div className="flex items-center justify-between">
                             <div>
-                                <p className="text-2xl font-bold text-gray-900">1st Semester</p>
+                                <p className="text-2xl font-bold text-gray-900">{classes[0]?.semester || 'N/A'}</p>
                                 <p className="text-sm text-gray-600">Current Period</p>
                             </div>
                             <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
@@ -273,13 +253,24 @@ function MyClasses() {
                                             <span className="px-2 py-1 bg-gray-100 text-gray-700 text-xs font-semibold rounded">
                                                 Section {classItem.section}
                                             </span>
+                                            <span className="px-2 py-1 bg-indigo-100 text-indigo-700 text-xs font-semibold rounded">
+                                                {classItem.yearLevel}
+                                            </span>
                                         </div>
                                         <h3 className="text-lg font-bold text-gray-900 mb-1">
                                             {classItem.subject}
                                         </h3>
                                     </div>
-                                    <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center shrink-0">
-                                        <BookOpen className="w-6 h-6 text-blue-600" />
+                                    <div className="w-12 h-12 bg-blue-100 rounded-lg overflow-hidden flex items-center justify-center shrink-0">
+                                        {resolveImageUrl(classItem.subjectImage) ? (
+                                            <img
+                                                src={resolveImageUrl(classItem.subjectImage)}
+                                                alt={classItem.subject}
+                                                className="w-full h-full object-cover"
+                                            />
+                                        ) : (
+                                            <BookOpen className="w-6 h-6 text-blue-600" />
+                                        )}
                                     </div>
                                 </div>
 

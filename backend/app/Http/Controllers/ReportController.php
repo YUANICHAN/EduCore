@@ -10,11 +10,28 @@ use App\Models\Enrollment;
 use App\Models\Grade;
 use App\Models\Attendance;
 use App\Models\AcademicYear;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class ReportController extends Controller
 {
+    private function resolveGeneratorId(Request $request): int
+    {
+        $userId = $request->user()?->id;
+        if ($userId) {
+            return (int) $userId;
+        }
+
+        $fallbackUserId = User::query()->value('id');
+        if (!$fallbackUserId) {
+            abort(500, 'No user record available to assign as report generator.');
+        }
+
+        return (int) $fallbackUserId;
+    }
+
     /**
      * Display a paginated listing of reports
      */
@@ -273,7 +290,7 @@ class ReportController extends Controller
         // Save the report
         $report = Report::create([
             'report_type' => 'grade_report',
-            'generated_by' => $request->user()->id,
+            'generated_by' => $this->resolveGeneratorId($request),
             'for_student_id' => $student->id,
             'academic_year_id' => $academicYear->id,
             'data' => $reportData,
@@ -376,7 +393,7 @@ class ReportController extends Controller
         // Save the report
         $report = Report::create([
             'report_type' => 'attendance_report',
-            'generated_by' => $request->user()->id,
+            'generated_by' => $this->resolveGeneratorId($request),
             'for_student_id' => $student->id,
             'academic_year_id' => $academicYear->id,
             'data' => $reportData,
@@ -487,7 +504,7 @@ class ReportController extends Controller
         // Save the report
         $report = Report::create([
             'report_type' => 'class_report',
-            'generated_by' => $request->user()->id,
+            'generated_by' => $this->resolveGeneratorId($request),
             'for_class_id' => $class->id,
             'academic_year_id' => $class->academic_year_id,
             'data' => $reportData,
@@ -509,7 +526,11 @@ class ReportController extends Controller
     {
         $validated = $request->validate([
             'academic_year_id' => 'required|exists:academic_years,id',
-            'program' => 'nullable|string',
+            'program_id' => 'nullable|exists:programs,id',
+            'section_id' => 'nullable|exists:sections,id',
+            'subject_id' => 'nullable|exists:subjects,id',
+            'term' => 'nullable|string|max:50',
+            'status' => 'nullable|string|max:50',
             'grade_level' => 'nullable|string',
         ]);
 
@@ -517,20 +538,54 @@ class ReportController extends Controller
 
         // Get students query
         $studentsQuery = Students::query();
-        if (isset($validated['program'])) {
-            $studentsQuery->where('program', $validated['program']);
+        if (isset($validated['program_id'])) {
+            $studentsQuery->where('program_id', $validated['program_id']);
+        }
+        if (isset($validated['section_id'])) {
+            $studentsQuery->where('section_id', $validated['section_id']);
         }
         if (isset($validated['grade_level'])) {
             $studentsQuery->where('grade_level', $validated['grade_level']);
         }
+
+        if (!empty($validated['status'])) {
+            $status = strtolower((string) $validated['status']);
+            if (in_array($status, ['enrolled', 'unassigned'], true)) {
+                $studentsQuery->where('enrollment_status', $status);
+            } elseif (in_array($status, ['active', 'disabled'], true)) {
+                $studentsQuery->where('account_status', $status);
+            }
+        }
+
         $students = $studentsQuery->get();
 
         // Calculate overall statistics
-        $enrollments = Enrollment::whereHas('class', function ($q) use ($validated) {
+        $enrollmentsQuery = Enrollment::whereHas('class', function ($q) use ($validated) {
                 $q->where('academic_year_id', $validated['academic_year_id']);
+
+                if (!empty($validated['section_id'])) {
+                    $q->where('section_id', $validated['section_id']);
+                }
+
+                if (!empty($validated['subject_id'])) {
+                    $q->where('subject_id', $validated['subject_id']);
+                }
+
+                if (!empty($validated['term'])) {
+                    $q->whereHas('subject', function ($subjectQuery) use ($validated) {
+                        $subjectQuery->where('semester', $validated['term']);
+                    });
+                }
             })
-            ->whereIn('student_id', $students->pluck('id'))
-            ->get();
+            ->whereIn('student_id', $students->pluck('id'));
+
+        if (!empty($validated['status']) && in_array(strtolower((string) $validated['status']), ['enrolled', 'dropped', 'completed'], true)) {
+            $enrollmentsQuery->where('status', strtolower((string) $validated['status']));
+        }
+
+        $enrollments = $enrollmentsQuery->get();
+
+        $studentCount = $enrollments->pluck('student_id')->unique()->count();
 
         $passedCount = $enrollments->where('final_grade', '<=', 3.0)->whereNotNull('final_grade')->count();
         $failedCount = $enrollments->where('final_grade', '>', 3.0)->whereNotNull('final_grade')->count();
@@ -549,7 +604,20 @@ class ReportController extends Controller
         $topPerformers = DB::table('enrollments')
             ->join('students', 'enrollments.student_id', '=', 'students.id')
             ->join('classes', 'enrollments.class_id', '=', 'classes.id')
+            ->join('subjects', 'classes.subject_id', '=', 'subjects.id')
             ->where('classes.academic_year_id', $validated['academic_year_id'])
+            ->when(!empty($validated['program_id']), function ($q) use ($validated) {
+                $q->where('students.program_id', $validated['program_id']);
+            })
+            ->when(!empty($validated['section_id']), function ($q) use ($validated) {
+                $q->where('classes.section_id', $validated['section_id']);
+            })
+            ->when(!empty($validated['subject_id']), function ($q) use ($validated) {
+                $q->where('classes.subject_id', $validated['subject_id']);
+            })
+            ->when(!empty($validated['term']), function ($q) use ($validated) {
+                $q->where('subjects.semester', $validated['term']);
+            })
             ->whereNotNull('enrollments.final_grade')
             ->select('students.id', 'students.student_number', 'students.first_name', 'students.last_name')
             ->selectRaw('AVG(enrollments.final_grade) as avg_gpa')
@@ -562,12 +630,16 @@ class ReportController extends Controller
             'title' => "Performance Report - {$academicYear->year_code}",
             'academic_year' => $academicYear->year_code,
             'filters' => [
-                'program' => $validated['program'] ?? 'All',
+                'program_id' => $validated['program_id'] ?? 'All',
+                'section_id' => $validated['section_id'] ?? 'All',
+                'subject_id' => $validated['subject_id'] ?? 'All',
+                'term' => $validated['term'] ?? 'All',
+                'status' => $validated['status'] ?? 'All',
                 'grade_level' => $validated['grade_level'] ?? 'All',
             ],
             'generated_at' => now()->toDateTimeString(),
             'summary' => [
-                'total_students' => $students->count(),
+                'total_students' => $studentCount,
                 'total_enrollments' => $enrollments->count(),
                 'graded_enrollments' => $totalGraded,
                 'passed' => $passedCount,
@@ -587,7 +659,7 @@ class ReportController extends Controller
         // Save the report
         $report = Report::create([
             'report_type' => 'performance_report',
-            'generated_by' => $request->user()->id,
+            'generated_by' => $this->resolveGeneratorId($request),
             'academic_year_id' => $academicYear->id,
             'data' => $reportData,
             'generated_at' => now(),
@@ -599,5 +671,179 @@ class ReportController extends Controller
             'data' => $report->load(['generator', 'academicYear']),
             'report_content' => $reportData,
         ], 201);
+    }
+
+    /**
+     * Export generated report data to CSV, Excel, or PDF.
+     */
+    public function export(Request $request, string $format)
+    {
+        $format = strtolower($format);
+        if (!in_array($format, ['csv', 'excel', 'pdf'], true)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unsupported export format.'
+            ], 422);
+        }
+
+        $validated = $request->validate([
+            'report_title' => 'nullable|string|max:255',
+            'report_type' => 'nullable|string|max:100',
+            'filters' => 'nullable|array',
+            'summary' => 'nullable|array',
+            'data' => 'required|array',
+        ]);
+
+        $title = $validated['report_title'] ?? 'Generated Report';
+        $rows = $validated['data'] ?? [];
+        $filters = $validated['filters'] ?? [];
+        $summary = $validated['summary'] ?? [];
+
+        $safeBaseName = Str::slug($title) ?: 'generated-report';
+        $timestamp = now()->format('Ymd_His');
+
+        if ($format === 'csv') {
+            $filename = "{$safeBaseName}_{$timestamp}.csv";
+            $csvContent = $this->buildCsvContent($rows);
+
+            return response()->streamDownload(function () use ($csvContent) {
+                echo "\xEF\xBB\xBF"; // UTF-8 BOM
+                echo $csvContent;
+            }, $filename, [
+                'Content-Type' => 'text/csv; charset=UTF-8',
+            ]);
+        }
+
+        $html = $this->buildReportHtml($title, $filters, $summary, $rows);
+
+        if ($format === 'excel') {
+            $filename = "{$safeBaseName}_{$timestamp}.xls";
+            return response($html, 200, [
+                'Content-Type' => 'application/vnd.ms-excel; charset=UTF-8',
+                'Content-Disposition' => "attachment; filename=\"{$filename}\"",
+            ]);
+        }
+
+        $filename = "{$safeBaseName}_{$timestamp}.pdf";
+        $pdf = app('dompdf.wrapper');
+        $pdf->loadHTML($html);
+        $pdf->setPaper('a4', 'portrait');
+
+        return $pdf->download($filename);
+    }
+
+    private function buildCsvContent(array $rows): string
+    {
+        $normalizedRows = $this->normalizeRows($rows);
+        if (empty($normalizedRows)) {
+            return "No data available\n";
+        }
+
+        $headers = array_keys($normalizedRows[0]);
+        $stream = fopen('php://temp', 'r+');
+        fputcsv($stream, $headers);
+
+        foreach ($normalizedRows as $row) {
+            fputcsv($stream, array_map(static function ($value) {
+                if (is_array($value) || is_object($value)) {
+                    return json_encode($value, JSON_UNESCAPED_UNICODE);
+                }
+                return $value;
+            }, $row));
+        }
+
+        rewind($stream);
+        $content = stream_get_contents($stream);
+        fclose($stream);
+
+        return $content ?: '';
+    }
+
+    private function buildReportHtml(string $title, array $filters, array $summary, array $rows): string
+    {
+        $normalizedRows = $this->normalizeRows($rows);
+        $headers = !empty($normalizedRows) ? array_keys($normalizedRows[0]) : [];
+
+        $filterItems = '';
+        foreach ($filters as $key => $value) {
+            if ($value === null || $value === '' || $value === 'all') {
+                continue;
+            }
+            $filterItems .= '<li><strong>' . e(ucwords(str_replace('_', ' ', (string) $key))) . ':</strong> ' . e((string) $value) . '</li>';
+        }
+
+        $summaryItems = '';
+        foreach ($summary as $key => $value) {
+            $summaryItems .= '<li><strong>' . e(ucwords(str_replace('_', ' ', (string) $key))) . ':</strong> ' . e((string) $value) . '</li>';
+        }
+
+        $thead = '';
+        foreach ($headers as $header) {
+            $thead .= '<th>' . e(ucwords(str_replace('_', ' ', (string) $header))) . '</th>';
+        }
+
+        $tbody = '';
+        foreach ($normalizedRows as $row) {
+            $tbody .= '<tr>';
+            foreach ($headers as $header) {
+                $cellValue = $row[$header] ?? '';
+                if (is_array($cellValue) || is_object($cellValue)) {
+                    $cellValue = json_encode($cellValue, JSON_UNESCAPED_UNICODE);
+                }
+                $tbody .= '<td>' . e((string) $cellValue) . '</td>';
+            }
+            $tbody .= '</tr>';
+        }
+
+        if ($tbody === '') {
+            $colspan = max(count($headers), 1);
+            $tbody = '<tr><td colspan="' . $colspan . '">No data available.</td></tr>';
+        }
+
+        return '<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: DejaVu Sans, Arial, sans-serif; font-size: 12px; color: #111827; }
+    h1 { font-size: 20px; margin: 0 0 10px; }
+    h2 { font-size: 14px; margin: 18px 0 8px; }
+    .meta { color: #4B5563; margin-bottom: 12px; }
+    ul { margin: 0; padding-left: 16px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { border: 1px solid #E5E7EB; padding: 6px; text-align: left; vertical-align: top; }
+    th { background: #F3F4F6; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <h1>' . e($title) . '</h1>
+  <p class="meta">Generated at: ' . e(now()->toDateTimeString()) . '</p>
+  <h2>Filters</h2>
+  <ul>' . ($filterItems !== '' ? $filterItems : '<li>None</li>') . '</ul>
+  <h2>Summary</h2>
+  <ul>' . ($summaryItems !== '' ? $summaryItems : '<li>None</li>') . '</ul>
+  <h2>Data</h2>
+  <table>
+    <thead><tr>' . $thead . '</tr></thead>
+    <tbody>' . $tbody . '</tbody>
+  </table>
+</body>
+</html>';
+    }
+
+    private function normalizeRows(array $rows): array
+    {
+        $normalized = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $cleanRow = $row;
+            unset($cleanRow['id']);
+            $normalized[] = $cleanRow;
+        }
+
+        return $normalized;
     }
 }

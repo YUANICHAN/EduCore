@@ -3,6 +3,10 @@ import { useState, useEffect, useCallback } from "react";
 import Sidebar from "../../Components/Admin/Sidebar.jsx";
 import reportService from "../../service/reportService";
 import academicYearService from "../../service/academicYearService";
+import programService from "../../service/programService";
+import sectionService from "../../service/sectionService";
+import subjectService from "../../service/subjectService";
+import studentService from "../../service/studentService";
 import { 
   FileText,
   Printer,
@@ -33,7 +37,7 @@ function Reports() {
     
     // Filter State
     const [filters, setFilters] = useState({
-        academicYear: '2024-2025',
+        academicYear: '',
         term: '',
         course: '',
         section: '',
@@ -50,30 +54,86 @@ function Reports() {
     
     // API Data State
     const [academicYears, setAcademicYears] = useState([]);
+    const [programs, setPrograms] = useState([]);
+    const [sections, setSections] = useState([]);
+    const [subjects, setSubjects] = useState([]);
+    const [allSections, setAllSections] = useState([]); // Keep original data
+    const [allSubjects, setAllSubjects] = useState([]); // Keep original data
+    const [termOptions, setTermOptions] = useState([]);
+    const [statusOptions, setStatusOptions] = useState([]);
     const [savedReports, setSavedReports] = useState([]);
     
     // Sample Report Data (would come from API)
     const [reportData, setReportData] = useState([]);
     const [reportSummary, setReportSummary] = useState(null);
 
-    // Fetch academic years on mount
+    // Fetch filter options on mount
     useEffect(() => {
-        const fetchAcademicYears = async () => {
+        const fetchFilterOptions = async () => {
             try {
-                const response = await academicYearService.getAll();
-                const years = (response.data || response || []).map(ay => 
-                    ay.year_code || ay.year || `${ay.start_year}-${ay.end_year}`
-                );
-                setAcademicYears(years.length > 0 ? years : ['2024-2025', '2023-2024']);
-                if (years.length > 0) {
-                    setFilters(prev => ({ ...prev, academicYear: years[0] }));
+                const [ayRes, progRes, secRes, subRes, stuRes] = await Promise.allSettled([
+                    academicYearService.getAll(),
+                    programService.getAll({ per_page: 'all' }),
+                    sectionService.getAll({ per_page: 'all' }),
+                    subjectService.getAll({ per_page: 'all' }),
+                    studentService.getAll({ per_page: 1000 }),
+                ]);
+
+                const ayRows = ayRes.status === 'fulfilled' ? (ayRes.value.data || ayRes.value || []) : [];
+                const mappedYears = ayRows.map((ay) => ({
+                    id: ay.id,
+                    label: ay.year_code || ay.year || `${ay.start_year || ''}-${ay.end_year || ''}`,
+                }));
+                setAcademicYears(mappedYears);
+                if (mappedYears.length > 0) {
+                    setFilters((prev) => ({ ...prev, academicYear: String(mappedYears[0].id) }));
                 }
+
+                const progRows = progRes.status === 'fulfilled' ? (progRes.value.data || progRes.value || []) : [];
+                setPrograms(
+                    progRows.map((p) => ({
+                        id: p.id,
+                        code: p.program_code || p.code || `Program ${p.id}`,
+                        name: p.program_name || p.name || p.program_code || p.code || `Program ${p.id}`,
+                    }))
+                );
+
+                const sectionRows = secRes.status === 'fulfilled' ? (secRes.value.data || secRes.value || []) : [];
+                const mappedSections = sectionRows.map((s) => ({
+                    id: s.id,
+                    code: s.section_code || s.name || `Section ${s.id}`,
+                    program_id: s.program_id ?? s.course_id ?? s.program?.id ?? null,
+                }));
+                setAllSections(mappedSections);
+                setSections(mappedSections);
+
+                const subjectRows = subRes.status === 'fulfilled' ? (subRes.value.data || subRes.value || []) : [];
+                const mappedSubjects = subjectRows.map((s) => ({
+                    id: s.id,
+                    code: s.subject_code || s.code || `Subject ${s.id}`,
+                    name: s.subject_name || s.name || s.subject_code || s.code || `Subject ${s.id}`,
+                    semester: s.semester || null,
+                    program_id: s.program_id ?? s.course_id ?? s.program?.id ?? null,
+                }));
+                setAllSubjects(mappedSubjects);
+                setSubjects(mappedSubjects);
+
+                const semesters = [...new Set(mappedSubjects.map((s) => s.semester).filter(Boolean))];
+                setTermOptions(semesters);
+
+                const studentRows = stuRes.status === 'fulfilled' ? (stuRes.value.data || stuRes.value || []) : [];
+                const statuses = [...new Set(
+                    studentRows
+                        .map((s) => s.enrollment_status || s.account_status)
+                        .filter(Boolean)
+                )];
+                setStatusOptions(statuses);
             } catch (err) {
-                console.error('Error fetching academic years:', err);
-                setAcademicYears(['2024-2025', '2023-2024']);
+                console.error('Error fetching filter options:', err);
+                setError('Failed to load report filter options.');
             }
         };
-        fetchAcademicYears();
+        fetchFilterOptions();
     }, []);
 
     // Fetch saved reports
@@ -88,6 +148,59 @@ function Reports() {
         };
         fetchSavedReports();
     }, []);
+
+    // Fetch sections and subjects filtered by selected program
+    useEffect(() => {
+        if (!filters.course) {
+            // If no program selected, show all sections/subjects
+            setSections(allSections);
+            setSubjects(allSubjects);
+            // Reset term options
+            const semesters = [...new Set(allSubjects.map((s) => s.semester).filter(Boolean))];
+            setTermOptions(semesters);
+            setFilters((prev) => ({
+                ...prev,
+                section: '',
+                subject: '',
+                term: prev.term && semesters.includes(prev.term) ? prev.term : '',
+            }));
+            return;
+        }
+
+        // Filter sections and subjects by selected program
+        const filteredSections = allSections.filter((s) => String(s.program_id) === String(filters.course));
+        const filteredSubjects = allSubjects.filter((s) => String(s.program_id) === String(filters.course));
+        
+        setSections(filteredSections);
+        setSubjects(filteredSubjects);
+
+        // Update term options based on filtered subjects (from selected program only)
+        const semesters = [...new Set(filteredSubjects.map((s) => s.semester).filter(Boolean))];
+        setTermOptions(semesters);
+
+        // Clear dependent selections but keep term if valid for the selected program.
+        setFilters((prev) => ({
+            ...prev,
+            section: '',
+            subject: '',
+            term: prev.term && semesters.includes(prev.term) ? prev.term : '',
+        }));
+    }, [filters.course, allSections, allSubjects]);
+
+    // Clear subject selection when term changes (since available subjects may change)
+    useEffect(() => {
+        if (!filters.term) {
+            return;
+        }
+
+        // Clear subject selection when term changes since available subjects for the new term may differ
+        if (filters.subject) {
+            const availableSubjectsForTerm = subjects.filter(s => s.semester === filters.term);
+            if (!availableSubjectsForTerm.find(s => String(s.id) === String(filters.subject))) {
+                setFilters(prev => ({ ...prev, subject: '' }));
+            }
+        }
+    }, [filters.term, subjects]);
 
     // Report Categories
     const reportCategories = [
@@ -126,111 +239,132 @@ function Reports() {
         ],
     };
 
+    const extractRowsFromReportContent = (content) => {
+        if (!content || typeof content !== 'object') return [];
+        if (Array.isArray(content.data)) return content.data;
+        if (Array.isArray(content.subjects)) return content.subjects;
+        if (Array.isArray(content.records)) return content.records;
+        if (Array.isArray(content.students)) return content.students;
+        if (Array.isArray(content.by_subject)) return content.by_subject;
+        if (Array.isArray(content.top_performers)) return content.top_performers;
+        if (content.gpa_distribution && typeof content.gpa_distribution === 'object') {
+            return Object.entries(content.gpa_distribution).map(([range, count]) => ({ range, count }));
+        }
+        return [];
+    };
+
     // Handle Report Generation
     const handleGenerateReport = async () => {
         setIsGenerating(true);
         setError(null);
         try {
+            let academicYearValue = filters.academicYear;
+
+            // Backward compatibility: resolve label values to IDs when needed.
+            if (academicYearValue && Number.isNaN(Number(academicYearValue))) {
+                const matched = academicYears.find((ay) => ay.label === academicYearValue);
+                academicYearValue = matched?.id ? String(matched.id) : '';
+            }
+
+            // Fallback to first available academic year if the filter is temporarily empty.
+            if (!academicYearValue && academicYears[0]?.id) {
+                academicYearValue = String(academicYears[0].id);
+                setFilters((prev) => ({ ...prev, academicYear: academicYearValue }));
+            }
+
+            if (!academicYearValue) {
+                throw new Error('Please select an academic year.');
+            }
+
             let response;
             const params = {
-                academic_year: filters.academicYear,
-                term: filters.term,
-                course: filters.course,
-                section_id: filters.section,
-                subject_id: filters.subject,
+                academic_year_id: Number(academicYearValue),
+                term: filters.term || undefined,
+                program_id: filters.course ? Number(filters.course) : undefined,
+                section_id: filters.section ? Number(filters.section) : undefined,
+                subject_id: filters.subject ? Number(filters.subject) : undefined,
+                status: filters.status && filters.status !== 'all' ? filters.status : undefined,
             };
 
-            // Try to use API based on report type
+            // Use backend report generators only (no hardcoded sample data)
             switch(selectedReportType) {
                 case 'grade-distribution':
                 case 'pass-fail':
                 case 'honor-students':
-                    response = await reportService.generateGradeReport(params);
-                    break;
                 case 'enrollment':
                 case 'student-list':
                 case 'student-master-list':
-                    response = await reportService.generatePerformanceReport(params);
-                    break;
                 case 'teacher-load':
                 case 'subjects-handled':
                 case 'teaching-hours':
-                    response = await reportService.generateClassReport(params);
+                case 'enrollment-stats':
+                case 'course-popularity':
+                case 'section-capacity':
+                case 'year-over-year':
+                case 'academic-record':
+                case 'grade-card':
+                    response = await reportService.generatePerformanceReport(params);
                     break;
                 default:
-                    // Fallback to sample data
-                    response = generateSampleData(selectedReportType);
+                    response = await reportService.generatePerformanceReport(params);
             }
             
-            const data = response.data || response;
-            if (data.data) {
-                setReportData(data.data);
-                setReportSummary(data.summary || null);
-            } else {
-                // Use sample data as fallback
-                const sampleData = generateSampleData(selectedReportType);
-                setReportData(sampleData.data);
-                setReportSummary(sampleData.summary);
-            }
+            const payload = response.data || response;
+            const reportContent = payload.report_content || payload?.data?.data || payload?.data || null;
+            const rows = extractRowsFromReportContent(reportContent);
+            const summary = reportContent?.summary || reportContent?.statistics || null;
+
+            setReportData(rows);
+            setReportSummary(summary);
             setReportGenerated(true);
         } catch (err) {
             console.error('Error generating report:', err);
-            // Use sample data as fallback
-            const sampleData = generateSampleData(selectedReportType);
-            setReportData(sampleData.data);
-            setReportSummary(sampleData.summary);
-            setReportGenerated(true);
+            setReportGenerated(false);
+            setReportData([]);
+            setReportSummary(null);
+            setError(err.response?.data?.message || err.message || 'Failed to generate report.');
         } finally {
             setIsGenerating(false);
         }
     };
 
-    // Generate sample data based on report type
-    const generateSampleData = (reportType) => {
-        // This is placeholder data - replace with actual API integration
-        switch(reportType) {
-            case 'enrollment':
-                return {
-                    data: [
-                        { id: 1, course: 'BSIT', year_level: '1st Year', enrolled: 245, capacity: 280, percentage: 87.5 },
-                        { id: 2, course: 'BSCS', year_level: '1st Year', enrolled: 198, capacity: 240, percentage: 82.5 },
-                        { id: 3, course: 'BSBA', year_level: '1st Year', enrolled: 167, capacity: 200, percentage: 83.5 },
-                        { id: 4, course: 'BSA', year_level: '1st Year', enrolled: 134, capacity: 180, percentage: 74.4 },
-                    ],
-                    summary: { total_enrolled: 744, total_capacity: 900, avg_utilization: 82.7 }
-                };
-            case 'student-list':
-                return {
-                    data: [
-                        { id: 1, student_id: '2024-00001', name: 'John Dela Cruz', course: 'BSIT', section: '1-A', status: 'Enrolled' },
-                        { id: 2, student_id: '2024-00002', name: 'Maria Santos', course: 'BSIT', section: '1-A', status: 'Enrolled' },
-                        { id: 3, student_id: '2024-00003', name: 'Jose Garcia', course: 'BSIT', section: '1-A', status: 'Enrolled' },
-                        { id: 4, student_id: '2024-00004', name: 'Ana Reyes', course: 'BSIT', section: '1-A', status: 'Enrolled' },
-                        { id: 5, student_id: '2024-00005', name: 'Carlos Mendoza', course: 'BSIT', section: '1-A', status: 'Enrolled' },
-                    ],
-                    summary: { total_students: 5, enrolled: 5, dropped: 0 }
-                };
-            case 'grade-distribution':
-                return {
-                    data: [
-                        { grade: '1.00 - 1.25', count: 45, percentage: 12.5, label: 'Excellent' },
-                        { grade: '1.50 - 1.75', count: 87, percentage: 24.2, label: 'Very Good' },
-                        { grade: '2.00 - 2.25', count: 123, percentage: 34.2, label: 'Good' },
-                        { grade: '2.50 - 2.75', count: 78, percentage: 21.7, label: 'Satisfactory' },
-                        { grade: '3.00', count: 27, percentage: 7.5, label: 'Passing' },
-                    ],
-                    summary: { total_grades: 360, average: 2.15, passing_rate: 92.5 }
-                };
-            default:
-                return { data: [], summary: null };
-        }
-    };
-
     // Handle Export
-    const handleExport = (format) => {
-        console.log(`Exporting report as ${format}...`);
-        // Implement actual export logic here
-        alert(`Exporting report as ${format.toUpperCase()}...\n\nThis will generate a ${format.toUpperCase()} file with:\n- School header and logo\n- Applied filters\n- Report data\n- Summary statistics\n\n(Implementation pending)`);
+    const handleExport = async (format) => {
+        if (!reportGenerated || !selectedReportType) {
+            setError('Generate a report first before exporting.');
+            return;
+        }
+
+        try {
+            const reportLabel = reportTypes[selectedCategory]?.find(r => r.id === selectedReportType)?.label || 'Generated Report';
+            const payload = {
+                report_title: reportLabel,
+                report_type: selectedReportType,
+                filters,
+                summary: reportSummary || {},
+                data: reportData || [],
+            };
+
+            const response = await reportService.exportGeneratedReport(format, payload);
+            const blob = new Blob([response.data], { type: response.headers['content-type'] || 'application/octet-stream' });
+
+            const disposition = response.headers['content-disposition'] || '';
+            const filenameMatch = disposition.match(/filename="?([^\";]+)"?/i);
+            const defaultExt = format === 'excel' ? 'xls' : format;
+            const filename = filenameMatch?.[1] || `report_${Date.now()}.${defaultExt}`;
+
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.URL.revokeObjectURL(url);
+        } catch (err) {
+            console.error('Export failed:', err);
+            setError('Failed to export report. Please try again.');
+        }
     };
 
     // Handle Print
@@ -242,7 +376,7 @@ function Reports() {
     // Reset Filters
     const resetFilters = () => {
         setFilters({
-            academicYear: '2024-2025',
+            academicYear: academicYears[0]?.id ? String(academicYears[0].id) : '',
             term: '',
             course: '',
             section: '',
@@ -251,6 +385,24 @@ function Reports() {
         });
         setReportGenerated(false);
         setReportData([]);
+    };
+
+    const getFilterDisplayValue = (key, value) => {
+        if (key === 'academicYear') {
+            return academicYears.find((ay) => String(ay.id) === String(value))?.label || value;
+        }
+        if (key === 'course') {
+            const program = programs.find((p) => String(p.id) === String(value));
+            return program ? `${program.code} - ${program.name}` : value;
+        }
+        if (key === 'section') {
+            return sections.find((s) => String(s.id) === String(value))?.code || value;
+        }
+        if (key === 'subject') {
+            const subject = subjects.find((s) => String(s.id) === String(value));
+            return subject ? `${subject.code} - ${subject.name}` : value;
+        }
+        return value;
     };
 
     return (
@@ -376,9 +528,10 @@ function Reports() {
                                                 onChange={(e) => setFilters({...filters, academicYear: e.target.value})}
                                                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                                             >
-                                                <option value="2024-2025">AY 2024-2025</option>
-                                                <option value="2023-2024">AY 2023-2024</option>
-                                                <option value="2022-2023">AY 2022-2023</option>
+                                                <option value="">Select Academic Year</option>
+                                                {academicYears.map((ay) => (
+                                                    <option key={ay.id} value={String(ay.id)}>{ay.label}</option>
+                                                ))}
                                             </select>
                                         </div>
 
@@ -391,9 +544,9 @@ function Reports() {
                                                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                                             >
                                                 <option value="">All Terms</option>
-                                                <option value="1st">1st Semester</option>
-                                                <option value="2nd">2nd Semester</option>
-                                                <option value="summer">Summer</option>
+                                                {termOptions.map((term) => (
+                                                    <option key={term} value={term}>{term}</option>
+                                                ))}
                                             </select>
                                         </div>
 
@@ -409,60 +562,81 @@ function Reports() {
                                                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                                             >
                                                 <option value="">All Courses</option>
-                                                <option value="BSIT">BSIT</option>
-                                                <option value="BSCS">BSCS</option>
-                                                <option value="BSBA">BSBA</option>
-                                                <option value="BSA">BSA</option>
+                                                {programs.map((program) => (
+                                                    <option key={program.id} value={String(program.id)}>{program.code} - {program.name}</option>
+                                                ))}
                                             </select>
                                         </div>
 
                                         {/* Section */}
                                         <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">Section</label>
+                                            <label className={`block text-sm font-medium mb-2 ${!filters.term || !filters.course ? 'text-gray-400' : 'text-gray-700'}`}>
+                                                Section
+                                                {(!filters.term || !filters.course) && <span className="text-xs text-gray-400"> (Select Term & Course first)</span>}
+                                            </label>
                                             <select
+                                                disabled={!filters.term || !filters.course}
                                                 value={filters.section}
                                                 onChange={(e) => setFilters({...filters, section: e.target.value})}
-                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                                className={`w-full px-3 py-2 border rounded-lg transition-colors ${
+                                                    !filters.term || !filters.course
+                                                        ? 'bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed opacity-50'
+                                                        : 'border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500'
+                                                }`}
                                             >
                                                 <option value="">All Sections</option>
-                                                <option value="1-A">1-A</option>
-                                                <option value="1-B">1-B</option>
-                                                <option value="2-A">2-A</option>
-                                                <option value="2-B">2-B</option>
+                                                {sections.map((section) => (
+                                                    <option key={section.id} value={String(section.id)}>{section.code}</option>
+                                                ))}
                                             </select>
                                         </div>
 
                                         {/* Subject */}
                                         <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            <label className={`block text-sm font-medium mb-2 ${!filters.term || !filters.course ? 'text-gray-400' : 'text-gray-700'}`}>
                                                 <BookOpen className="w-4 h-4 inline mr-1" />
                                                 Subject
+                                                {(!filters.term || !filters.course) && <span className="text-xs text-gray-400"> (Select Term & Course first)</span>}
                                             </label>
                                             <select
+                                                disabled={!filters.term || !filters.course}
                                                 value={filters.subject}
                                                 onChange={(e) => setFilters({...filters, subject: e.target.value})}
-                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                                className={`w-full px-3 py-2 border rounded-lg transition-colors ${
+                                                    !filters.term || !filters.course
+                                                        ? 'bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed opacity-50'
+                                                        : 'border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500'
+                                                }`}
                                             >
                                                 <option value="">All Subjects</option>
-                                                <option value="PROG1">Programming 1</option>
-                                                <option value="PROG2">Programming 2</option>
-                                                <option value="WEBDEV">Web Development</option>
-                                                <option value="DATABASE">Database Management</option>
+                                                {subjects
+                                                    .filter(subject => !filters.term || subject.semester === filters.term)
+                                                    .map((subject) => (
+                                                        <option key={subject.id} value={String(subject.id)}>{subject.code} - {subject.name}</option>
+                                                    ))}
                                             </select>
                                         </div>
 
                                         {/* Status */}
                                         <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">Status</label>
+                                            <label className={`block text-sm font-medium mb-2 ${!filters.term || !filters.course ? 'text-gray-400' : 'text-gray-700'}`}>
+                                                Status
+                                                {(!filters.term || !filters.course) && <span className="text-xs text-gray-400"> (Select Term & Course first)</span>}
+                                            </label>
                                             <select
+                                                disabled={!filters.term || !filters.course}
                                                 value={filters.status}
                                                 onChange={(e) => setFilters({...filters, status: e.target.value})}
-                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                                className={`w-full px-3 py-2 border rounded-lg transition-colors ${
+                                                    !filters.term || !filters.course
+                                                        ? 'bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed opacity-50'
+                                                        : 'border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500'
+                                                }`}
                                             >
                                                 <option value="all">All Status</option>
-                                                <option value="enrolled">Enrolled</option>
-                                                <option value="dropped">Dropped</option>
-                                                <option value="graduated">Graduated</option>
+                                                {statusOptions.map((status) => (
+                                                    <option key={status} value={status}>{status}</option>
+                                                ))}
                                             </select>
                                         </div>
                                     </div>
@@ -508,7 +682,7 @@ function Reports() {
                                                 {reportTypes[selectedCategory]?.find(r => r.id === selectedReportType)?.label}
                                             </h2>
                                             <p className="text-sm text-gray-600 mt-1">
-                                                Academic Year: {filters.academicYear} {filters.term && `• ${filters.term} Semester`}
+                                                Academic Year: {academicYears.find((ay) => String(ay.id) === String(filters.academicYear))?.label || 'N/A'} {filters.term && `• ${filters.term}`}
                                             </p>
                                         </div>
                                         <div className="flex gap-2">
@@ -550,7 +724,7 @@ function Reports() {
                                                 return (
                                                     <span key={key} className="inline-flex items-center gap-1 px-3 py-1 bg-gray-100 text-gray-700 rounded-full text-xs">
                                                         <span className="font-medium capitalize">{key.replace(/([A-Z])/g, ' $1')}:</span>
-                                                        <span>{value}</span>
+                                                        <span>{getFilterDisplayValue(key, value)}</span>
                                                     </span>
                                                 );
                                             }

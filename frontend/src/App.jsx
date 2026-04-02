@@ -89,6 +89,11 @@ function App() {
               <Students />
             </ProtectedRoute>
           } />
+          <Route path="/admin/students/assigned" element={
+            <ProtectedRoute allowedRoles={['admin']}>
+              <Students />
+            </ProtectedRoute>
+          } />
           <Route path="/admin/students/unassigned" element={
             <ProtectedRoute allowedRoles={['admin']}>
               <UnassignedStudents />
@@ -196,7 +201,7 @@ function App() {
               <TeacherStudents />
             </ProtectedRoute>
           } />
-          <Route path="/teacher/reports" element={
+          <Route path="/teacher/reports" element={   
             <ProtectedRoute allowedRoles={['teacher']}>
               <TeacherReports />
             </ProtectedRoute>

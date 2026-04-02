@@ -27,6 +27,7 @@ import schoolLogo from '../../assets/ACLC_LOGO.jpg';
 
 function Sidebar({ activeItem, setActiveItem }) {
   const navRef = useRef(null);
+  const [currentUser, setCurrentUser] = useState(() => authService.getCurrentUser());
   const [isUsersOpen, setIsUsersOpen] = useState(() => {
     const saved = localStorage.getItem('adminSidebarUsersOpen');
     return saved !== null ? JSON.parse(saved) : false;
@@ -78,6 +79,35 @@ function Sidebar({ activeItem, setActiveItem }) {
   }, []);
 
   useEffect(() => {
+    const fetchProfile = async () => {
+      try {
+        const response = await authService.getProfile();
+        const user = response?.data || response || null;
+        if (user) {
+          setCurrentUser(user);
+          localStorage.setItem('user', JSON.stringify(user));
+        }
+      } catch (error) {
+        // Keep local user fallback if profile request fails.
+      }
+    };
+
+    fetchProfile();
+  }, []);
+
+  useEffect(() => {
+    const handleUserUpdated = (event) => {
+      const updatedUser = event?.detail;
+      if (updatedUser) {
+        setCurrentUser(updatedUser);
+      }
+    };
+
+    window.addEventListener('auth-user-updated', handleUserUpdated);
+    return () => window.removeEventListener('auth-user-updated', handleUserUpdated);
+  }, []);
+
+  useEffect(() => {
     const nav = navRef.current;
     if (!nav) {
       return;
@@ -102,6 +132,47 @@ function Sidebar({ activeItem, setActiveItem }) {
 
   const navigate = useNavigate();
 
+  const getInitials = (name) => {
+    if (!name) return 'U';
+    const parts = name.trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return 'U';
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return `${parts[0][0] || ''}${parts[1][0] || ''}`.toUpperCase();
+  };
+
+  const resolveImageUrl = (imagePath) => {
+    if (!imagePath) return null;
+    if (/^https?:\/\//i.test(imagePath) || imagePath.startsWith('data:') || imagePath.startsWith('blob:')) {
+      return imagePath;
+    }
+
+    const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api';
+    const backendOrigin = apiBaseUrl.replace(/\/api\/?$/, '');
+    let normalizedPath = imagePath.startsWith('/') ? imagePath.slice(1) : imagePath;
+
+    if (!normalizedPath.startsWith('storage/') && normalizedPath.startsWith('avatars/')) {
+      normalizedPath = `storage/${normalizedPath}`;
+    }
+
+    if (normalizedPath.startsWith('public/')) {
+      normalizedPath = normalizedPath.replace(/^public\//, 'storage/');
+    }
+
+    return `${backendOrigin}/${normalizedPath}`;
+  };
+
+  const roleMap = {
+    admin: 'Administrator',
+    teacher: 'Teacher',
+    student: 'Student',
+    registrar: 'Registrar',
+  };
+
+  const roleLabel = currentUser?.role
+    ? roleMap[currentUser.role] || `${currentUser.role.charAt(0).toUpperCase()}${currentUser.role.slice(1)}`
+    : 'User';
+  const avatarUrl = resolveImageUrl(currentUser?.avatar);
+
   const menuItems = [
     { name: "Dashboard", icon: LayoutDashboard, path: "/admin/dashboard" },
     {
@@ -120,8 +191,8 @@ function Sidebar({ activeItem, setActiveItem }) {
       icon: StudentsIcon,
       hasDropdown: true,
       subItems: [
-        // { name: "Assigned Students", icon: StudentsIcon, path: "/admin/students" },
-        // { name: "Unassigned Students", icon: UserPlus, path: "/admin/students/unassigned" },
+        { name: "Assigned Students", icon: StudentsIcon, path: "/admin/students/assigned" },
+        { name: "Unassigned Students", icon: UserPlus, path: "/admin/students/unassigned" },
         { name: "Students List", icon: Users, path: "/admin/students/list" },
       ]
     },
@@ -354,16 +425,20 @@ function Sidebar({ activeItem, setActiveItem }) {
 
         <div className={`${isOpen ? 'p-4' : 'p-3'} border-t border-white/10`}>
           <div className={`flex items-center ${isOpen ? 'space-x-3' : 'justify-center'}`}>
-            <div className="w-9 h-9 bg-white/10 rounded-full flex items-center justify-center">
-              <span className="text-sm font-medium text-white">JD</span>
+            <div className="w-9 h-9 bg-white/10 rounded-full overflow-hidden flex items-center justify-center">
+              {avatarUrl ? (
+                <img src={avatarUrl} alt="Profile" className="w-full h-full object-cover" />
+              ) : (
+                <span className="text-sm font-medium text-white">{getInitials(currentUser?.name)}</span>
+              )}
             </div>
             {isOpen && (
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-white truncate">
-                  John Doe
+                  {currentUser?.name || 'Unknown User'}
                 </p>
                 <p className="text-xs text-white/60 truncate">
-                  Administrator
+                  {roleLabel}
                 </p>
               </div>
             )}

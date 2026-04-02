@@ -55,11 +55,24 @@ const classService = {
   /**
    * Get students in class
    * @param {number} classId 
+   * @param {Object} params
    * @returns {Promise}
    */
-  getStudents: async (classId) => {
-    const response = await api.get(`/classes/${classId}/students`);
+  getStudents: async (classId, params = {}) => {
+    const response = await api.get(`/classes/${classId}/students`, { params });
     return response.data;
+  },
+
+  /**
+   * Export enrolled students list for a class as Excel file
+   * @param {number} classId
+   * @returns {Promise}
+   */
+  exportStudentsExcel: async (classId) => {
+    const response = await api.get(`/classes/${classId}/students/export-excel`, {
+      responseType: 'blob',
+    });
+    return response;
   },
 
   /**

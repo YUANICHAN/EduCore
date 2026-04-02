@@ -87,6 +87,20 @@ class EnrollmentController extends Controller
 
         // Check class capacity
         $class = Classes::find($validated['class_id']);
+        if (!$class || !$class->teacher_id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot enroll students in an unassigned class. Please assign a teacher first.'
+            ], 422);
+        }
+
+        if (($class->status ?? 'active') !== 'active') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot enroll students in a class that is not active.'
+            ], 422);
+        }
+
         if ($class->enrolled_count >= $class->capacity) {
             return response()->json([
                 'success' => false,
@@ -230,6 +244,20 @@ class EnrollmentController extends Controller
 
         $class = Classes::find($validated['class_id']);
         $studentIds = $validated['student_ids'];
+
+        if (!$class || !$class->teacher_id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot bulk enroll into an unassigned class. Please assign a teacher first.'
+            ], 422);
+        }
+
+        if (($class->status ?? 'active') !== 'active') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot bulk enroll into a class that is not active.'
+            ], 422);
+        }
         
         // Check capacity
         $currentEnrolled = Enrollment::where('class_id', $class->id)

@@ -21,7 +21,7 @@ import {
 function TeachersList() {
   const [activeItem, setActiveItem] = useState("Teachers List");
   const [searchTerm, setSearchTerm] = useState("");
-  const [sortField, setSortField] = useState("employee_number");
+  const [sortField, setSortField] = useState("employee_id");
   const [sortDirection, setSortDirection] = useState("asc");
   const [filterDepartment, setFilterDepartment] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
@@ -41,6 +41,12 @@ function TeachersList() {
     keepPreviousData: true,
   });
 
+  const workloadSummaryQuery = useQuery({
+    queryKey: ['teachers', 'workload-summary'],
+    queryFn: () => teacherService.getWorkloadSummary(),
+    staleTime: 2 * 60 * 1000,
+  });
+
   const teachers = useMemo(() => {
     const data = teachersQuery.data;
     if (!data) return [];
@@ -50,31 +56,55 @@ function TeachersList() {
     return [];
   }, [teachersQuery.data]);
 
+  const workloadByTeacherId = useMemo(() => {
+    const summaryPayload = workloadSummaryQuery.data;
+    const rows = summaryPayload?.data?.teachers || summaryPayload?.teachers || [];
+    const map = new Map();
+    rows.forEach((row) => {
+      if (row?.teacher_id != null) {
+        map.set(String(row.teacher_id), row);
+      }
+    });
+    return map;
+  }, [workloadSummaryQuery.data]);
+
+  const teachersWithLoad = useMemo(() => {
+    return teachers.map((teacher) => {
+      const summary = workloadByTeacherId.get(String(teacher.id));
+      if (!summary) return teacher;
+      return {
+        ...teacher,
+        teaching_load: summary.current_load ?? teacher.teaching_load ?? 0,
+        classes_count: summary.classes_count ?? teacher.classes_count,
+      };
+    });
+  }, [teachers, workloadByTeacherId]);
+
   // Get total count from API pagination metadata
   const totalTeachersInDB = useMemo(() => {
-    return teachersQuery.data?.total || teachers.length;
-  }, [teachersQuery.data, teachers.length]);
+    return teachersQuery.data?.total || teachersWithLoad.length;
+  }, [teachersQuery.data, teachersWithLoad.length]);
 
   // Get unique departments
   const departments = useMemo(() => {
     const depts = new Set();
-    teachers.forEach(teacher => {
+    teachersWithLoad.forEach(teacher => {
       if (teacher.department?.name) {
         depts.add(teacher.department.name);
       }
     });
     return Array.from(depts).sort();
-  }, [teachers]);
+  }, [teachersWithLoad]);
 
   // Filter teachers based on search and filters
   const filteredTeachers = useMemo(() => {
-    let filtered = teachers;
+    let filtered = teachersWithLoad;
 
     // Search filter
     if (searchTerm) {
       filtered = filtered.filter((teacher) => {
         const fullName = `${teacher.first_name || ''} ${teacher.last_name || ''}`.toLowerCase();
-        const employeeNumber = (teacher.employee_number || '').toLowerCase();
+        const employeeNumber = (teacher.employee_id || teacher.employee_number || '').toLowerCase();
         const email = (teacher.email || '').toLowerCase();
         const department = (teacher.department?.name || '').toLowerCase();
         const search = searchTerm.toLowerCase();
@@ -103,7 +133,7 @@ function TeachersList() {
     }
 
     return filtered;
-  }, [teachers, searchTerm, filterDepartment, filterStatus]);
+  }, [teachersWithLoad, searchTerm, filterDepartment, filterStatus]);
 
   // Sort teachers
   const sortedTeachers = useMemo(() => {
@@ -113,9 +143,9 @@ function TeachersList() {
       let aValue, bValue;
 
       switch (sortField) {
-        case "employee_number":
-          aValue = a.employee_number || "";
-          bValue = b.employee_number || "";
+        case "employee_id":
+          aValue = a.employee_id || a.employee_number || "";
+          bValue = b.employee_id || b.employee_number || "";
           break;
         case "name":
           aValue = `${a.first_name || ''} ${a.last_name || ''}`.toLowerCase();
@@ -126,12 +156,12 @@ function TeachersList() {
           bValue = b.email || "";
           break;
         case "department":
-          aValue = a.department || "";
-          bValue = b.department || "";
+          aValue = a.department?.name || "";
+          bValue = b.department?.name || "";
           break;
         case "load":
-          aValue = a.total_load || a.current_load || 0;
-          bValue = b.total_load || b.current_load || 0;
+          aValue = Number(a.teaching_load ?? a.total_load ?? a.current_load ?? 0);
+          bValue = Number(b.teaching_load ?? b.total_load ?? b.current_load ?? 0);
           break;
         default:
           aValue = "";
@@ -189,7 +219,7 @@ function TeachersList() {
     setCurrentPage(1);
   };
 
-  const loading = teachersQuery.isLoading || teachersQuery.isFetching;
+  const loading = teachersQuery.isLoading || teachersQuery.isFetching || workloadSummaryQuery.isLoading;
 
   return (
     <div className="flex h-screen">
@@ -204,7 +234,10 @@ function TeachersList() {
                 <p className="text-gray-600 mt-1">Complete list of all teachers with search and filters</p>
               </div>
               <button
-                onClick={() => queryClient.invalidateQueries({ queryKey: ['teachers'] })}
+                      onClick={() => {
+                        queryClient.invalidateQueries({ queryKey: ['teachers'] });
+                        queryClient.invalidateQueries({ queryKey: ['teachers', 'workload-summary'] });
+                      }}
                 className="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-lg flex items-center space-x-2 transition-colors"
               >
                 <RefreshCw className="w-5 h-5" />
@@ -213,7 +246,7 @@ function TeachersList() {
             </div>
             
             {/* Stats Cards */}
-            {teachers.length > 0 && (
+            {teachersWithLoad.length > 0 && (
               <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div className="bg-white p-4 rounded-lg border border-gray-200 shadow-sm">
                   <div className="flex items-center justify-between">
@@ -238,7 +271,7 @@ function TeachersList() {
                     <div>
                       <p className="text-sm text-gray-600">Active Teachers</p>
                       <p className="text-2xl font-bold text-green-600">
-                        {teachers.filter(t => t.employment_status === 'active' || t.status === 'active').length}
+                        {teachersWithLoad.filter(t => t.employment_status === 'active' || t.status === 'active').length}
                       </p>
                       <p className="text-xs text-gray-500 mt-1">from loaded data</p>
                     </div>
@@ -409,12 +442,12 @@ function TeachersList() {
                           Photo
                         </th>
                         <th
-                          onClick={() => handleSort("employee_number")}
+                          onClick={() => handleSort("employee_id")}
                           className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
                         >
                           <div className="flex items-center">
                             Employee Number
-                            {renderSortIcon("employee_number")}
+                            {renderSortIcon("employee_id")}
                           </div>
                         </th>
                         <th
@@ -474,7 +507,7 @@ function TeachersList() {
                             </div>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                            {teacher.employee_number || 'N/A'}
+                            {teacher.employee_id || teacher.employee_number || 'N/A'}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="text-sm font-medium text-gray-900">
@@ -497,7 +530,7 @@ function TeachersList() {
                             <div className="flex items-center space-x-1">
                               <BookOpen className="w-4 h-4 text-gray-400" />
                               <span>
-                                {teacher.total_load || teacher.current_load || 0} / {teacher.max_load || 24} units
+                                {teacher.teaching_load ?? teacher.total_load ?? teacher.current_load ?? 0} / {teacher.max_load || 24} units
                               </span>
                             </div>
                           </td>

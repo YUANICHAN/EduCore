@@ -4,38 +4,6 @@ import Sidebar from '../../Components/Student/Sidebar.jsx';
 import { BookOpen, Clock, Sparkles, Loader2, AlertCircle } from 'lucide-react';
 import enrollmentService from '../../service/enrollmentService';
 
-// Fallback data for development/demo
-const getFallbackSubjects = () => [
-  {
-    code: 'CS 301',
-    name: 'Data Structures & Algorithms',
-    units: 3,
-    teacher: 'Prof. Maria Santos',
-    status: 'Ongoing',
-  },
-  {
-    code: 'CS 302',
-    name: 'Database Management Systems',
-    units: 3,
-    teacher: 'Prof. Juan Cruz',
-    status: 'Ongoing',
-  },
-  {
-    code: 'CS 303',
-    name: 'Software Engineering',
-    units: 3,
-    teacher: 'Prof. Ana Reyes',
-    status: 'Ongoing',
-  },
-  {
-    code: 'CS 204',
-    name: 'Discrete Mathematics',
-    units: 3,
-    teacher: 'Prof. Pedro Garcia',
-    status: 'Completed',
-  },
-];
-
 function Subjects() {
   const [activeItem, setActiveItem] = useState('Subjects');
   const [enrolledSubjects, setEnrolledSubjects] = useState([]);

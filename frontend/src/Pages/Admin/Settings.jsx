@@ -2,6 +2,7 @@ import '../../App.css'
 import { useState, useEffect } from "react";
 import Sidebar from "../../Components/Admin/Sidebar.jsx";
 import settingsService from "../../service/settingsService";
+import authService from "../../service/authService";
 import {
   Settings as SettingsIcon,
   Save,
@@ -26,15 +27,61 @@ import {
   Phone,
   MapPin,
   Globe,
-  Loader2
+  Loader2,
+  User,
 } from 'lucide-react';
 
 function Settings() {
   const [activeItem, setActiveItem] = useState("Settings");
   const [activeTab, setActiveTab] = useState('general');
   const [saveStatus, setSaveStatus] = useState(null);
+  const [saveMessage, setSaveMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [passwordLoading, setPasswordLoading] = useState(false);
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
+  const [profileForm, setProfileForm] = useState({
+    name: '',
+    email: '',
+    phone: '',
+    address: '',
+    avatar: '',
+    avatarFile: null,
+    avatarPreview: null,
+  });
+
+  const [passwordForm, setPasswordForm] = useState({
+    current_password: '',
+    password: '',
+    password_confirmation: '',
+  });
+
+  const resolveImageUrl = (imagePath) => {
+    if (!imagePath) return null;
+    if (/^https?:\/\//i.test(imagePath) || imagePath.startsWith('data:') || imagePath.startsWith('blob:')) {
+      return imagePath;
+    }
+    const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api';
+    const backendOrigin = apiBaseUrl.replace(/\/api\/?$/, '');
+
+    let normalizedPath = imagePath.startsWith('/') ? imagePath.slice(1) : imagePath;
+
+    // Laravel stores avatars as "avatars/..." on the public disk.
+    // Public URLs for that disk are served under "/storage/...".
+    if (!normalizedPath.startsWith('storage/') && normalizedPath.startsWith('avatars/')) {
+      normalizedPath = `storage/${normalizedPath}`;
+    }
+
+    if (normalizedPath.startsWith('public/')) {
+      normalizedPath = normalizedPath.replace(/^public\//, 'storage/');
+    }
+
+    return `${backendOrigin}/${normalizedPath}`;
+  };
 
   // General Settings State
   const [generalSettings, setGeneralSettings] = useState({
@@ -139,9 +186,116 @@ function Settings() {
     fetchSettings();
   }, []);
 
+  useEffect(() => {
+    const fetchProfile = async () => {
+      setProfileLoading(true);
+      try {
+        const response = await authService.getProfile();
+        const user = response?.data || response || {};
+        setProfileForm((prev) => ({
+          ...prev,
+          name: user.name || '',
+          email: user.email || '',
+          phone: user.phone || '',
+          address: user.address || '',
+          avatar: user.avatar || '',
+          avatarPreview: null,
+          avatarFile: null,
+        }));
+      } catch (err) {
+        console.error('Failed to load profile:', err);
+      } finally {
+        setProfileLoading(false);
+      }
+    };
+    fetchProfile();
+  }, []);
+
+  const handleProfileImageChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const preview = URL.createObjectURL(file);
+    setProfileForm((prev) => ({
+      ...prev,
+      avatarFile: file,
+      avatarPreview: preview,
+    }));
+  };
+
+  const handleSaveProfile = async () => {
+    setSaveStatus('saving');
+    setSaveMessage('Saving profile to database...');
+    setError(null);
+    try {
+      const formData = new FormData();
+      formData.append('name', profileForm.name || '');
+      formData.append('email', profileForm.email || '');
+      formData.append('phone', profileForm.phone || '');
+      formData.append('address', profileForm.address || '');
+      if (profileForm.avatarFile) {
+        formData.append('avatar', profileForm.avatarFile);
+      }
+
+      const response = await authService.updateProfile(formData);
+      const user = response?.user || response?.data?.user || null;
+      if (user) {
+        setProfileForm((prev) => ({
+          ...prev,
+          name: user.name || prev.name,
+          email: user.email || prev.email,
+          phone: user.phone || '',
+          address: user.address || '',
+          avatar: user.avatar || prev.avatar,
+          avatarFile: null,
+          avatarPreview: null,
+        }));
+      }
+      setSaveStatus('success');
+      setSaveMessage('Profile and photo saved successfully to database.');
+      setTimeout(() => setSaveStatus(null), 3000);
+    } catch (err) {
+      console.error('Failed to update profile:', err);
+      setError(err.response?.data?.message || 'Failed to update profile');
+      setSaveStatus(null);
+      setSaveMessage('');
+    }
+  };
+
+  const handleChangePassword = async () => {
+    setError(null);
+    if (passwordForm.password !== passwordForm.password_confirmation) {
+      setError('New password and confirmation do not match');
+      return;
+    }
+
+    setPasswordLoading(true);
+    try {
+      await authService.updatePassword(
+        passwordForm.current_password,
+        passwordForm.password,
+        passwordForm.password_confirmation
+      );
+      setPasswordForm({
+        current_password: '',
+        password: '',
+        password_confirmation: '',
+      });
+      setSaveStatus('success');
+      setSaveMessage('Password updated successfully.');
+      setTimeout(() => setSaveStatus(null), 3000);
+    } catch (err) {
+      console.error('Failed to update password:', err);
+      setError(err.response?.data?.message || 'Failed to update password');
+      setSaveMessage('');
+    } finally {
+      setPasswordLoading(false);
+    }
+  };
+
   // Handle Save
   const handleSave = async (section) => {
     setSaveStatus('saving');
+    setSaveMessage('Saving settings...');
     setError(null);
     
     try {
@@ -174,16 +328,19 @@ function Settings() {
       
       await settingsService.update(section, settingsData);
       setSaveStatus('success');
+      setSaveMessage('Settings saved successfully.');
       setTimeout(() => setSaveStatus(null), 3000);
     } catch (err) {
       console.error('Failed to save settings:', err);
       setError('Failed to save settings. Please try again.');
       setSaveStatus(null);
+      setSaveMessage('');
     }
   };
 
   // Settings Tabs
   const tabs = [
+    { id: 'profile', label: 'Profile', icon: User },
     { id: 'general', label: 'General', icon: SettingsIcon },
     { id: 'academic', label: 'Academic', icon: BookOpen },
     { id: 'users', label: 'Users & Roles', icon: Users },
@@ -222,14 +379,6 @@ function Settings() {
 
         {!loading && (
           <>
-            {/* Info Banner */}
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6 flex items-start gap-3">
-              <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-              <div>
-                <p className="text-sm text-amber-900 font-medium">Super Admin Only</p>
-                <p className="text-xs text-amber-700 mt-1">Changes here affect the entire platform. Proceed with caution.</p>
-              </div>
-            </div>
 
         {/* Save Status */}
         {saveStatus && (
@@ -241,12 +390,12 @@ function Settings() {
             {saveStatus === 'success' ? (
               <>
                 <CheckCircle className="w-5 h-5" />
-                <span>Settings saved successfully!</span>
+                <span>{saveMessage || 'Saved successfully.'}</span>
               </>
             ) : (
               <>
                 <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                <span>Saving settings...</span>
+                <span>{saveMessage || 'Saving...'}</span>
               </>
             )}
           </div>
@@ -277,6 +426,144 @@ function Settings() {
 
         {/* Tab Content */}
         <div className="bg-white rounded-lg border border-gray-200 shadow-sm">
+          {/* PROFILE SETTINGS */}
+          {activeTab === 'profile' && (
+            <div className="p-6 space-y-8">
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="lg:col-span-1">
+                  <div className="bg-gray-50 border border-gray-200 rounded-lg p-6 text-center">
+                    <div className="w-28 h-28 rounded-full overflow-hidden bg-gray-200 mx-auto mb-4">
+                      {(profileForm.avatarPreview || resolveImageUrl(profileForm.avatar)) ? (
+                        <img
+                          src={profileForm.avatarPreview || resolveImageUrl(profileForm.avatar)}
+                          alt="Profile"
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center">
+                          <User className="w-10 h-10 text-gray-500" />
+                        </div>
+                      )}
+                    </div>
+                    <label className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+                      <Upload className="w-4 h-4" />
+                      <span className="text-sm font-medium">Upload Photo</span>
+                      <input type="file" accept="image/*" className="hidden" onChange={handleProfileImageChange} />
+                    </label>
+                    <p className="text-xs text-gray-500 mt-2">JPG, PNG up to 2MB</p>
+                  </div>
+                </div>
+
+                <div className="lg:col-span-2 space-y-4">
+                  <h3 className="text-lg font-semibold text-gray-900">Profile Information</h3>
+                  {profileLoading ? (
+                    <div className="flex items-center gap-2 text-gray-600">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Loading profile...
+                    </div>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">Full Name</label>
+                          <input
+                            type="text"
+                            value={profileForm.name}
+                            onChange={(e) => setProfileForm({ ...profileForm, name: e.target.value })}
+                            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
+                          <input
+                            type="email"
+                            value={profileForm.email}
+                            onChange={(e) => setProfileForm({ ...profileForm, email: e.target.value })}
+                            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">Phone</label>
+                          <input
+                            type="text"
+                            value={profileForm.phone}
+                            onChange={(e) => setProfileForm({ ...profileForm, phone: e.target.value })}
+                            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">Address</label>
+                          <input
+                            type="text"
+                            value={profileForm.address}
+                            onChange={(e) => setProfileForm({ ...profileForm, address: e.target.value })}
+                            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          />
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={handleSaveProfile}
+                        className="flex items-center gap-2 px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
+                      >
+                        <Save className="w-4 h-4" />
+                        Save Profile
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="pt-6 border-t border-gray-200 space-y-4">
+                <h3 className="text-lg font-semibold text-gray-900">Change Password</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="relative">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">New Password</label>
+                    <input
+                      type={showNewPassword ? 'text' : 'password'}
+                      value={passwordForm.password}
+                      onChange={(e) => setPasswordForm({ ...passwordForm, password: e.target.value })}
+                      className="w-full px-4 py-2 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowNewPassword(!showNewPassword)}
+                      className="absolute right-3 top-10 text-gray-500"
+                    >
+                      {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+
+                  <div className="relative">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Confirm New Password</label>
+                    <input
+                      type={showConfirmPassword ? 'text' : 'password'}
+                      value={passwordForm.password_confirmation}
+                      onChange={(e) => setPasswordForm({ ...passwordForm, password_confirmation: e.target.value })}
+                      className="w-full px-4 py-2 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                      className="absolute right-3 top-10 text-gray-500"
+                    >
+                      {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleChangePassword}
+                  disabled={passwordLoading}
+                  className="flex items-center gap-2 px-6 py-2.5 bg-gray-900 text-white rounded-lg hover:bg-black transition-colors font-medium disabled:opacity-60"
+                >
+                  {passwordLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
+                  Update Password
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* GENERAL SETTINGS */}
           {activeTab === 'general' && (
             <div className="p-6 space-y-6">

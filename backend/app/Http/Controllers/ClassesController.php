@@ -13,7 +13,7 @@ class ClassesController extends Controller
      */
     public function index(Request $request)
     {
-        $query = Classes::with(['subject', 'teacher', 'section', 'academicYear']);
+        $query = Classes::with(['subject.program', 'teacher', 'section', 'academicYear', 'schedules']);
         
         // Search functionality
         if ($request->has('search')) {
@@ -35,6 +35,9 @@ class ClassesController extends Controller
         // Filter by teacher
         if ($request->has('teacher_id')) {
             $query->where('teacher_id', $request->teacher_id);
+        } elseif ($request->user() && $request->user()->role === 'teacher' && $request->user()->teacher_id) {
+            // Default teachers to only their own classes when teacher_id filter is not provided.
+            $query->where('teacher_id', $request->user()->teacher_id);
         }
         
         // Filter by section
@@ -51,6 +54,11 @@ class ClassesController extends Controller
         if ($request->has('status')) {
             $query->where('status', $request->status);
         }
+
+        // Optionally return only classes that already have an assigned teacher
+        if ($request->boolean('assigned_only')) {
+            $query->whereNotNull('teacher_id');
+        }
         
         // Sorting
         $sortBy = $request->get('sort_by', 'class_code');
@@ -59,6 +67,11 @@ class ClassesController extends Controller
         
         // Include counts
         $query->withCount('enrollments');
+        $query->withCount([
+            'enrollments as enrolled_students_count' => function ($q) {
+                $q->where('status', 'enrolled');
+            }
+        ]);
         
         // Pagination
         $perPage = $request->get('per_page', 15);
@@ -120,7 +133,14 @@ class ClassesController extends Controller
     {
         return response()->json([
             'success' => true,
-            'data' => $class->load(['subject', 'teacher', 'section', 'academicYear', 'enrollments', 'schedules'])
+            'data' => $class
+                ->load(['subject', 'teacher', 'section', 'academicYear', 'enrollments.student', 'schedules'])
+                ->loadCount([
+                    'enrollments',
+                    'enrollments as enrolled_students_count' => function ($q) {
+                        $q->where('status', 'enrolled');
+                    }
+                ])
         ]);
     }
 
@@ -196,6 +216,67 @@ class ClassesController extends Controller
         $students = $query->paginate($perPage);
         
         return response()->json($students);
+    }
+
+    /**
+     * Export enrolled students in a class to an Excel-compatible file.
+     */
+    public function exportStudentsExcel(Classes $class)
+    {
+        $rows = $class->enrollments()
+            ->with('student')
+            ->where('status', 'enrolled')
+            ->orderBy('created_at', 'asc')
+            ->get();
+
+        $escape = static function ($value): string {
+            return htmlspecialchars((string) ($value ?? ''), ENT_QUOTES, 'UTF-8');
+        };
+
+        $subjectCode = $class->subject?->subject_code ?? $class->class_code ?? 'CLASS';
+        $sectionCode = $class->section?->section_code ?? 'SECTION';
+        $timestamp = now()->format('Ymd_His');
+        $filename = sprintf('%s_%s_students_%s.xls', $subjectCode, $sectionCode, $timestamp);
+
+        $tableRows = '';
+        foreach ($rows as $index => $enrollment) {
+            $student = $enrollment->student;
+            $fullName = trim(($student?->first_name ?? '') . ' ' . ($student?->last_name ?? '')) ?: ($student?->name ?? 'N/A');
+
+            $tableRows .= '<tr>'
+                . '<td>' . $escape($index + 1) . '</td>'
+                . '<td>' . $escape($student?->student_number ?? $student?->id ?? 'N/A') . '</td>'
+                . '<td>' . $escape($fullName) . '</td>'
+                . '<td>' . $escape($student?->email ?? 'N/A') . '</td>'
+                . '<td>' . $escape($student?->phone ?? 'N/A') . '</td>'
+                . '<td>' . $escape(ucfirst((string) ($enrollment->status ?? 'enrolled'))) . '</td>'
+                . '</tr>';
+        }
+
+        if ($tableRows === '') {
+            $tableRows = '<tr><td colspan="6">No enrolled students found.</td></tr>';
+        }
+
+        $content = '<html><head><meta charset="UTF-8"></head><body>'
+            . '<h3>Class Student List</h3>'
+            . '<p><strong>Class:</strong> ' . $escape($class->class_code ?? 'N/A') . '</p>'
+            . '<p><strong>Subject:</strong> ' . $escape($class->subject?->subject_name ?? 'N/A') . '</p>'
+            . '<p><strong>Section:</strong> ' . $escape($sectionCode) . '</p>'
+            . '<table border="1" cellspacing="0" cellpadding="6">'
+            . '<thead><tr>'
+            . '<th>#</th><th>Student Number</th><th>Name</th><th>Email</th><th>Phone</th><th>Status</th>'
+            . '</tr></thead>'
+            . '<tbody>' . $tableRows . '</tbody>'
+            . '</table>'
+            . '</body></html>';
+
+        return response($content, 200, [
+            'Content-Type' => 'application/vnd.ms-excel; charset=UTF-8',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+            'Cache-Control' => 'max-age=0, no-cache, no-store, must-revalidate',
+            'Pragma' => 'no-cache',
+            'Expires' => '0',
+        ]);
     }
 
     /**

@@ -51,6 +51,9 @@ class SubjectController extends Controller
         
         // Pagination
         $perPage = $request->get('per_page', 15);
+        if ($perPage === 'all' || (int) $perPage === -1) {
+              return response()->json($query->get());
+        }
         $subjects = $query->paginate($perPage);
         
         return response()->json($subjects);
@@ -184,6 +187,9 @@ class SubjectController extends Controller
         }
         
         $perPage = $request->get('per_page', 15);
+        if ($perPage === 'all' || (int) $perPage === -1) {
+            return response()->json(['data' => $query->get()]);
+        }
         $classes = $query->paginate($perPage);
         
         return response()->json($classes);

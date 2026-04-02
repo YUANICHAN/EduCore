@@ -11,6 +11,7 @@ use App\Models\Subject;
 use App\Models\AcademicYear;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Database\QueryException;
 
 class TeachersController extends Controller
 {
@@ -513,6 +514,11 @@ class TeachersController extends Controller
         if ($request->has('section_id')) {
             $query->where('section_id', $request->section_id);
         }
+
+        // Filter by subject
+        if ($request->has('subject_id')) {
+            $query->where('subject_id', $request->subject_id);
+        }
         
         $query->orderBy('created_at', 'desc');
         
@@ -817,9 +823,11 @@ class TeachersController extends Controller
     {
         $validated = $request->validate([
             'class_id' => 'required|exists:classes,id',
+            'cancel_class' => 'sometimes|boolean',
         ]);
 
         $class = Classes::findOrFail($validated['class_id']);
+        $cancelClass = (bool) ($validated['cancel_class'] ?? false);
 
         if ($class->teacher_id !== $teacher->id) {
             return response()->json([
@@ -828,11 +836,88 @@ class TeachersController extends Controller
             ], 422);
         }
 
-        $class->update(['teacher_id' => null]);
+        try {
+            $updatePayload = ['teacher_id' => null];
+            if ($cancelClass) {
+                $updatePayload['status'] = 'cancelled';
+            }
+
+            $class->update($updatePayload);
+        } catch (QueryException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unable to unassign class because the current database schema requires every class to have a teacher. Please run the latest migrations to allow unassigned classes.'
+            ], 500);
+        }
 
         return response()->json([
             'success' => true,
-            'message' => 'Class unassigned from teacher successfully'
+            'message' => $cancelClass
+                ? 'Class unassigned and cancelled successfully'
+                : 'Class unassigned from teacher successfully',
+            'data' => [
+                'class_id' => $class->id,
+                'status' => $class->status,
+                'teacher_id' => $class->teacher_id,
+            ],
+        ]);
+    }
+
+    /**
+     * Permanently delete a class assigned to a teacher, only when it has no academic records
+     */
+    public function deleteClass(Request $request, Teachers $teacher)
+    {
+        $validated = $request->validate([
+            'class_id' => 'required|exists:classes,id',
+        ]);
+
+        $class = Classes::withCount([
+            'enrollments',
+            'grades',
+            'attendance',
+            'schedules',
+            'announcements',
+        ])->findOrFail($validated['class_id']);
+
+        if ($class->teacher_id !== $teacher->id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This class is not assigned to this teacher'
+            ], 422);
+        }
+
+        $blockingCounts = [
+            'enrollments' => (int) ($class->enrollments_count ?? 0),
+            'grades' => (int) ($class->grades_count ?? 0),
+            'attendance' => (int) ($class->attendance_count ?? 0),
+            'schedules' => (int) ($class->schedules_count ?? 0),
+            'announcements' => (int) ($class->announcements_count ?? 0),
+        ];
+
+        $activeBlockers = array_filter($blockingCounts, fn ($count) => $count > 0);
+        if (!empty($activeBlockers)) {
+            $summary = collect($activeBlockers)
+                ->map(fn ($count, $name) => "{$name}: {$count}")
+                ->values()
+                ->join(', ');
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Class cannot be deleted because related records exist. Use Unassign + Cancel instead.',
+                'data' => [
+                    'blockers' => $activeBlockers,
+                    'summary' => $summary,
+                ],
+            ], 422);
+        }
+
+        $classCode = $class->class_code ?: "Class #{$class->id}";
+        $class->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => "{$classCode} deleted permanently",
         ]);
     }
 

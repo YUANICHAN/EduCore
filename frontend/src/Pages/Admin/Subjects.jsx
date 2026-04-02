@@ -1,4 +1,4 @@
-import '../../App.css';
+﻿import '../../App.css';
 import { useMemo, useState } from "react";
 import Sidebar from "../../Components/Admin/Sidebar.jsx";
 import subjectService from "../../service/subjectService";
@@ -9,7 +9,6 @@ import {
   BookOpen,
   Plus,
   Edit,
-  Archive,
   Search,
   Filter,
   LayoutGrid,
@@ -20,7 +19,6 @@ import {
   Users,
   Zap,
   ChevronRight,
-  Home,
   GraduationCap,
   Calendar,
   Loader2,
@@ -28,6 +26,19 @@ import {
 } from "lucide-react";
 
 function Subjects() {
+  const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api';
+  const backendOrigin = apiBaseUrl.replace(/\/api\/?$/, '');
+  const DEFAULT_PROGRAM_IMAGE = 'https://images.unsplash.com/photo-1517694712202-14dd9538aa97?w=500&q=80';
+
+  const resolveImageUrl = (imagePath) => {
+    if (!imagePath) return null;
+    if (/^https?:\/\//i.test(imagePath) || imagePath.startsWith('data:') || imagePath.startsWith('blob:')) {
+      return imagePath;
+    }
+    const normalizedPath = imagePath.startsWith('/') ? imagePath.slice(1) : imagePath;
+    return `${backendOrigin}/${normalizedPath}`;
+  };
+
   const [activeItem, setActiveItem] = useState("Subjects");
   const [searchTerm, setSearchTerm] = useState("");
   const queryClient = useQueryClient();
@@ -114,13 +125,14 @@ function Subjects() {
       name: p.id.toString(), // Use ID for consistent matching with subjects.course
       code: p.program_code || p.code || '',
       fullName: p.name || p.program_name || '',
+      image: resolveImageUrl(p.program_image || p.image) || DEFAULT_PROGRAM_IMAGE,
       color: ['blue', 'green', 'purple', 'orange', 'red'][p.id % 5] || 'blue',
     }));
 
     return mapped.length > 0 ? mapped : [
-      { id: 1, name: '1', code: "BSIT", fullName: "BS in Information Technology", color: "blue" },
-      { id: 2, name: '2', code: "BSBA", fullName: "BS in Business Administration", color: "green" },
-      { id: 3, name: '3', code: "BSHM", fullName: "BS in Hospitality Management", color: "purple" },
+      { id: 1, name: '1', code: "BSIT", fullName: "BS in Information Technology", image: DEFAULT_PROGRAM_IMAGE, color: "blue" },
+      { id: 2, name: '2', code: "BSBA", fullName: "BS in Business Administration", image: DEFAULT_PROGRAM_IMAGE, color: "green" },
+      { id: 3, name: '3', code: "BSHM", fullName: "BS in Hospitality Management", image: DEFAULT_PROGRAM_IMAGE, color: "purple" },
     ];
   }, [programsQuery.data]);
 
@@ -286,21 +298,6 @@ function Subjects() {
     }
   };
 
-  const handleArchive = async (id) => {
-    try {
-      const subject = subjects.find(s => s.id === id);
-      if (subject) {
-        await subjectService.update(id, { 
-          status: subject.status === "Active" ? "Inactive" : "Active" 
-        });
-        await queryClient.invalidateQueries({ queryKey: ['subjects'] });
-      }
-    } catch (err) {
-      console.error('Error updating subject status:', err);
-      alert('Failed to update subject status.');
-    }
-  };
-
   const handleDeleteSubject = async () => {
     if (!subjectToDelete) return;
     setSaving(true);
@@ -309,10 +306,21 @@ function Subjects() {
       await queryClient.invalidateQueries({ queryKey: ['subjects'] });
       setShowDeleteModal(false);
       setSubjectToDelete(null);
-    } catch (err) {
-      console.error('Error deleting subject:', err);
-      alert('Failed to delete subject. Please try again.');
-    } finally {
+        Swal.fire({
+          icon: 'success',
+          title: 'Deleted!',
+          text: 'Subject has been deleted successfully',
+          timer: 2000,
+          showConfirmButton: false
+        });
+      } catch (err) {
+        console.error('Error deleting subject:', err);
+        Swal.fire({
+          icon: 'error',
+          title: 'Error!',
+          text: 'Failed to delete subject. Please try again.'
+        });
+      } finally {
       setSaving(false);
     }
   };
@@ -369,10 +377,6 @@ function Subjects() {
               <p className="text-gray-600 mt-1">Navigate through programs, years, and semesters</p>
             </div>
             <div className="flex items-center space-x-3">
-              <button className="bg-white border border-gray-200 text-gray-700 px-4 py-2 rounded-lg flex items-center space-x-2 hover:bg-gray-50">
-                <Archive className="w-4 h-4" />
-                <span>Archive</span>
-              </button>
               <button
                 onClick={() => {
                   setEditingSubject(null);
@@ -387,58 +391,52 @@ function Subjects() {
           </div>
 
           {/* Breadcrumb Navigation */}
-          <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-4">
-            <div className="flex items-center space-x-2 text-sm flex-wrap">
-              <button
-                onClick={navigateToPrograms}
-                className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg transition-colors ${
-                  drillDownLevel === "programs"
-                    ? "bg-blue-100 text-blue-700 font-semibold"
-                    : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-                }`}
-              >
-                <Home className="w-4 h-4" />
-                <span>Subjects</span>
-              </button>
+          <div className="mb-1">
+            <div className="flex items-center text-sm text-gray-500 flex-wrap gap-y-1">
+              <span>Admin</span>
+              <ChevronRight className="w-4 h-4 mx-1" />
+              {drillDownLevel === "programs" ? (
+                <span className="text-gray-900 font-medium">Subjects</span>
+              ) : (
+                <button onClick={navigateToPrograms} className="hover:text-blue-600 transition-colors">Subjects</button>
+              )}
 
               {selectedCourse && (
                 <>
-                  <ChevronRight className="w-4 h-4 text-gray-400" />
-                  <button
-                    onClick={() => navigateToYears(selectedCourse)}
-                    className={`px-3 py-1.5 rounded-lg transition-colors ${
-                      drillDownLevel === "years"
-                        ? "bg-blue-100 text-blue-700 font-semibold"
-                        : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-                    }`}
-                  >
-                    {selectedCourse}
-                  </button>
+                  <ChevronRight className="w-4 h-4 mx-1" />
+                  {drillDownLevel === "years" ? (
+                    <span className="text-gray-900 font-medium">{selectedCourse}</span>
+                  ) : (
+                    <button
+                      onClick={() => navigateToYears(selectedCourse)}
+                      className="hover:text-blue-600 transition-colors"
+                    >
+                      {selectedCourse}
+                    </button>
+                  )}
                 </>
               )}
 
               {selectedYear && (
                 <>
-                  <ChevronRight className="w-4 h-4 text-gray-400" />
-                  <button
-                    onClick={() => navigateToSemesters(selectedYear)}
-                    className={`px-3 py-1.5 rounded-lg transition-colors ${
-                      drillDownLevel === "semesters"
-                        ? "bg-blue-100 text-blue-700 font-semibold"
-                        : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-                    }`}
-                  >
-                    Year {selectedYear}
-                  </button>
+                  <ChevronRight className="w-4 h-4 mx-1" />
+                  {drillDownLevel === "semesters" ? (
+                    <span className="text-gray-900 font-medium">Year {selectedYear}</span>
+                  ) : (
+                    <button
+                      onClick={() => navigateToSemesters(selectedYear)}
+                      className="hover:text-blue-600 transition-colors"
+                    >
+                      Year {selectedYear}
+                    </button>
+                  )}
                 </>
               )}
 
               {selectedSemester && (
                 <>
-                  <ChevronRight className="w-4 h-4 text-gray-400" />
-                  <span className="px-3 py-1.5 bg-blue-100 text-blue-700 font-semibold rounded-lg">
-                    {selectedSemester}
-                  </span>
+                  <ChevronRight className="w-4 h-4 mx-1" />
+                  <span className="text-gray-900 font-medium">{selectedSemester}</span>
                 </>
               )}
             </div>
@@ -458,19 +456,28 @@ function Subjects() {
                     <button
                       key={course.name}
                       onClick={() => navigateToYears(course.name)}
-                      className="bg-white rounded-lg border border-gray-200 shadow-sm p-6 hover:shadow-lg hover:border-blue-300 transition-all text-left group"
+                      className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden hover:shadow-lg hover:border-blue-300 transition-all text-left group"
                     >
+                      <div className="h-32 overflow-hidden">
+                        <img
+                          src={course.image}
+                          alt={`${course.fullName} banner`}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                      </div>
+                      <div className="p-6">
                       <div className="flex items-start justify-between mb-4">
-                        <div className={`w-12 h-12 bg-${course.color}-100 rounded-lg flex items-center justify-center group-hover:bg-${course.color}-200 transition-colors`}>
-                          <GraduationCap className={`w-6 h-6 text-${course.color}-600`} />
+                        <div className="px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-semibold">
+                          {course.code}
                         </div>
                         <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-blue-600 transition-colors" />
                       </div>
-                      <h3 className="text-xl font-bold text-gray-900 mb-2">{course.name}</h3>
+                      <h3 className="text-xl font-bold text-gray-900 mb-2">{course.fullName}</h3>
                       <p className="text-sm text-gray-600 mb-4">{course.fullName}</p>
                       <div className="flex items-center justify-between pt-4 border-t border-gray-100">
                         <span className="text-sm text-gray-600">Active Subjects</span>
                         <span className="text-2xl font-bold text-blue-600">{subjectCount}</span>
+                      </div>
                       </div>
                     </button>
                   );
@@ -482,7 +489,7 @@ function Subjects() {
           {/* YEAR LEVELS VIEW */}
           {drillDownLevel === "years" && (
             <div>
-              <div className="mb-4 flex justify-between items-center">
+              <div className="mb-6 mt-6 flex justify-between items-center">
                 <h2 className="text-xl font-semibold text-gray-900">
                   Select Year Level - {courses.find(c => c.name === selectedCourse)?.fullName}
                 </h2>
@@ -652,16 +659,16 @@ function Subjects() {
                             setEditingSubject(subject);
                             setShowCreateModal(true);
                           }}
-                          className="text-gray-500 hover:text-blue-600"
+                          className="inline-flex items-center justify-center p-1.5 rounded-md text-blue-600 hover:text-blue-700 hover:bg-blue-50 transition-colors"
                         >
                           <Edit className="w-4 h-4" />
                         </button>
-                        <button
-                          onClick={() => handleArchive(subject.id)}
-                          className="text-gray-500 hover:text-red-600"
-                        >
-                          <Archive className="w-4 h-4" />
-                        </button>
+                          <button
+                            onClick={() => openDeleteModal(subject)}
+                            className="inline-flex items-center justify-center p-1.5 rounded-md text-red-600 hover:text-red-700 hover:bg-red-50 transition-colors"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                       </div>
                     </div>
                   </div>
@@ -777,7 +784,7 @@ function Subjects() {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-600">
-                        {subject.sections} sections · {subject.teachers} teacher(s)
+                        {subject.sections} sections - {subject.teachers} teacher(s)
                       </td>
                       <td className="px-4 py-3 text-right space-x-2">
                         <button
@@ -785,16 +792,16 @@ function Subjects() {
                             setEditingSubject(subject);
                             setShowCreateModal(true);
                           }}
-                          className="text-gray-500 hover:text-blue-600"
+                          className="inline-flex items-center justify-center p-1.5 rounded-md text-blue-600 hover:text-blue-700 hover:bg-blue-50 transition-colors"
                         >
                           <Edit className="w-4 h-4" />
                         </button>
-                        <button
-                          onClick={() => handleArchive(subject.id)}
-                          className="text-gray-500 hover:text-red-600"
-                        >
-                          <Archive className="w-4 h-4" />
-                        </button>
+                          <button
+                            onClick={() => openDeleteModal(subject)}
+                            className="inline-flex items-center justify-center p-1.5 rounded-md text-red-600 hover:text-red-700 hover:bg-red-50 transition-colors"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                       </td>
                     </tr>
                   ))}
@@ -1110,3 +1117,5 @@ function DeleteConfirmModal({ subject, onConfirm, onClose, saving }) {
 }
 
 export default Subjects;
+
+

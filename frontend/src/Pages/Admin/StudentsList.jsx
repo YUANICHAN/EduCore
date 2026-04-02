@@ -1,5 +1,5 @@
-import '../../App.css';
-import { useState, useMemo } from "react";
+﻿import '../../App.css';
+import { useState, useMemo, useEffect } from "react";
 import Sidebar from "../../Components/Admin/Sidebar.jsx";
 import Swal from 'sweetalert2';
 import studentService from "../../service/studentService";
@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 
 function StudentsList() {
+  const STUDENTS_LIST_VIEW_MODE_KEY = 'admin.studentsList.viewMode';
   const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api';
   const backendOrigin = apiBaseUrl.replace(/\/api\/?$/, '');
 
@@ -51,7 +52,11 @@ function StudentsList() {
   const [currentPage, setCurrentPage] = useState(1);
   const [entriesPerPage, setEntriesPerPage] = useState(20);
   const [showFilters, setShowFilters] = useState(false);
-  const [viewMode, setViewMode] = useState("table"); // table or grid
+  const [viewMode, setViewMode] = useState(() => {
+    if (typeof window === 'undefined') return 'table';
+    const savedMode = localStorage.getItem(STUDENTS_LIST_VIEW_MODE_KEY);
+    return savedMode === 'grid' || savedMode === 'table' ? savedMode : 'table';
+  }); // table or grid
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState(null);
@@ -65,6 +70,10 @@ function StudentsList() {
   });
   const [formLoading, setFormLoading] = useState(false);
   const [formError, setFormError] = useState(null);
+
+  useEffect(() => {
+    localStorage.setItem(STUDENTS_LIST_VIEW_MODE_KEY, viewMode);
+  }, [viewMode]);
 
   const queryClient = useQueryClient();
 
@@ -428,13 +437,6 @@ function StudentsList() {
                     <span className="text-sm font-medium">Grid</span>
                   </button>
                 </div>
-                <button
-                  onClick={() => queryClient.invalidateQueries({ queryKey: ['students'] })}
-                  className="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-lg flex items-center space-x-2 transition-colors"
-                >
-                  <RefreshCw className="w-5 h-5" />
-                  <span>Refresh</span>
-                </button>
               </div>
             </div>
             
@@ -759,7 +761,7 @@ function StudentsList() {
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">
                             Status
                           </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider sticky right-0 bg-gray-50 z-10">
                             Actions
                           </th>
                         </tr>
@@ -821,9 +823,9 @@ function StudentsList() {
                             <td className="px-6 py-4 whitespace-nowrap">
                               {renderAccountBadge(student.account_status)}
                             </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-right space-x-2">
-                              <button onClick={() => openEditModal(student)} className="text-gray-500 hover:text-blue-600" title="Edit student"><Edit className="w-4 h-4" /></button>
-                              <button onClick={() => openDeleteModal(student)} className="text-gray-500 hover:text-red-600" title="Delete student"><Trash2 className="w-4 h-4" /></button>
+                            <td className="px-6 py-4 whitespace-nowrap text-right space-x-2 sticky right-0 bg-white">
+                              <button onClick={() => openEditModal(student)} className="inline-flex items-center justify-center p-1.5 rounded-md text-blue-600 hover:text-blue-700 hover:bg-blue-50 transition-colors" title="Edit student"><Edit className="w-4 h-4" /></button>
+                              <button onClick={() => openDeleteModal(student)} className="inline-flex items-center justify-center p-1.5 rounded-md text-red-600 hover:text-red-700 hover:bg-red-50 transition-colors" title="Delete student"><Trash2 className="w-4 h-4" /></button>
                             </td>
                           </tr>
                         ))}
@@ -903,8 +905,8 @@ function StudentsList() {
 
                         {/* Actions */}
                         <div className="mt-3 pt-3 border-t border-gray-200 flex items-center justify-center space-x-2">
-                          <button onClick={() => openEditModal(student)} className="text-gray-500 hover:text-blue-600" title="Edit student"><Edit className="w-4 h-4" /></button>
-                          <button onClick={() => openDeleteModal(student)} className="text-gray-500 hover:text-red-600" title="Delete student"><Trash2 className="w-4 h-4" /></button>
+                          <button onClick={() => openEditModal(student)} className="inline-flex items-center justify-center p-1.5 rounded-md text-blue-600 hover:text-blue-700 hover:bg-blue-50 transition-colors" title="Edit student"><Edit className="w-4 h-4" /></button>
+                          <button onClick={() => openDeleteModal(student)} className="inline-flex items-center justify-center p-1.5 rounded-md text-red-600 hover:text-red-700 hover:bg-red-50 transition-colors" title="Delete student"><Trash2 className="w-4 h-4" /></button>
                         </div>
                       </div>
                     ))}
@@ -1140,3 +1142,5 @@ function StudentsList() {
 }
 
 export default StudentsList;
+
+

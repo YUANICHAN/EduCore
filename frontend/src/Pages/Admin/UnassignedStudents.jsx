@@ -52,6 +52,7 @@ function UnassignedStudents() {
       ...(selectedProgram && { program_id: selectedProgram.id }),
       search: searchTerm || undefined,
       unassigned_only: true,
+      enrollment_status: 'unassigned',
       page: currentPage,
       per_page: entriesPerPage,
     }),

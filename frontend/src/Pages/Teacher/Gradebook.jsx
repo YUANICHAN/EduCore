@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import Sidebar from '../../Components/Teacher/Sidebar.jsx';
 import gradeService from '../../service/gradeService';
 import classService from '../../service/classService';
+import authService from '../../service/authService';
 import {
   BookOpen,
   Calculator,
@@ -55,27 +56,35 @@ function Gradebook() {
     setLoading(true);
     setError(null);
     try {
-      const response = await classService.getAll({ teacher: true });
-      const classes = (response.data || response || []).map(c => ({
+      const user = authService.getCurrentUser();
+      const response = await classService.getAll({
+        per_page: 1000,
+        status: 'active',
+        ...(user?.teacher_id ? { teacher_id: user.teacher_id } : {}),
+      });
+
+      const payload = response?.data ?? response;
+      const classRows = Array.isArray(payload) ? payload : (Array.isArray(payload?.data) ? payload.data : []);
+
+      const asText = (value, fallback = '') => {
+        if (value === null || value === undefined) return fallback;
+        if (typeof value === 'string' || typeof value === 'number') return String(value);
+        return fallback;
+      };
+
+      const classes = classRows.map(c => ({
         id: c.id,
-        code: c.subject_code || c.code || '',
-        name: c.subject_name || c.name || '',
-        section: c.section_name || c.section || '',
-        semester: c.semester || '1st Semester',
-        students: c.students_count || c.enrolled_count || 0,
+        code: asText(c.subject?.subject_code) || asText(c.subject_code) || asText(c.code) || 'N/A',
+        name: asText(c.subject?.subject_name) || asText(c.subject_name) || asText(c.name) || 'Class',
+        section: asText(c.section?.section_code) || asText(c.section_name) || asText(c.section) || 'N/A',
+        semester: asText(c.subject?.semester) || asText(c.semester) || asText(c.academic_year?.semester) || '1st Semester',
+        students: Number(c.enrolled_students_count ?? c.enrollments_count ?? c.students_count ?? c.enrolled_count ?? 0),
       }));
-      setSubjects(classes.length > 0 ? classes : [
-        { id: 1, code: 'MATH101', name: 'Mathematics 101', section: 'A', semester: '1st Semester', students: 42 },
-        { id: 2, code: 'PHYS102', name: 'Physics Laboratory', section: 'B', semester: '1st Semester', students: 38 },
-      ]);
+      setSubjects(classes);
     } catch (err) {
       console.error('Error fetching classes:', err);
-      // Fallback to sample data
-      setSubjects([
-        { id: 1, code: 'MATH101', name: 'Mathematics 101', section: 'A', semester: '1st Semester', students: 42 },
-        { id: 2, code: 'PHYS102', name: 'Physics Laboratory', section: 'B', semester: '1st Semester', students: 38 },
-        { id: 3, code: 'ENG201', name: 'English Communication', section: 'C', semester: '2nd Semester', students: 45 },
-      ]);
+      // Set empty array on error - no fallback
+      setSubjects([]);
     } finally {
       setLoading(false);
     }
@@ -114,10 +123,7 @@ function Gradebook() {
         }
       });
 
-      setStudents(studentsData.length > 0 ? studentsData : [
-        { id: 1, name: 'Adam Apple', scores: { quizzes: { q1: 24, q2: 18 }, exams: { e1: 92, e2: 91 }, projects: { p1: 45 } } },
-        { id: 2, name: 'Leslie Gaon', scores: { quizzes: { q1: 26, q2: 19 }, exams: { e1: 90, e2: 93 }, projects: { p1: 40 } } },
-      ]);
+      setStudents(studentsData);
 
       // Set default assessments if none
       if (assessments.quizzes.length === 0) {
@@ -137,25 +143,8 @@ function Gradebook() {
       }
     } catch (err) {
       console.error('Error fetching grades:', err);
-      // Set fallback sample data
-      setStudents([
-        { id: 1, name: 'Adam Apple', scores: { quizzes: { q1: 24, q2: 18 }, exams: { e1: 92, e2: 91 }, projects: { p1: 45 } } },
-        { id: 2, name: 'Leslie Gaon', scores: { quizzes: { q1: 26, q2: 19 }, exams: { e1: 90, e2: 93 }, projects: { p1: 40 } } },
-        { id: 3, name: 'Julie Smithson', scores: { quizzes: { q1: 27, q2: 17 }, exams: { e1: 91, e2: 90 }, projects: { p1: 43 } } },
-      ]);
-      setAssessments({
-        quizzes: [
-          { id: 'q1', name: 'Quiz 1', max: 30, term: 'Prelim' },
-          { id: 'q2', name: 'Quiz 2', max: 20, term: 'Midterm' },
-        ],
-        exams: [
-          { id: 'e1', name: 'Midterm Exam', max: 100, term: 'Midterm' },
-          { id: 'e2', name: 'Final Exam', max: 100, term: 'Finals' },
-        ],
-        projects: [
-          { id: 'p1', name: 'Project 1', max: 50, term: 'Prefi' },
-        ],
-      });
+      // No fallback - show empty state
+      setStudents([]);
     } finally {
       setLoading(false);
     }

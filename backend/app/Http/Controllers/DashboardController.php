@@ -158,7 +158,18 @@ class DashboardController extends Controller
      */
     public function teacher(Request $request)
     {
-        $teacher = $request->user()->teacher;
+        $user = $request->user();
+
+        if (!$user) {
+            return response()->json(['error' => 'Unauthenticated'], 401);
+        }
+
+        if ($user->role !== 'teacher') {
+            return response()->json(['error' => 'Forbidden'], 403);
+        }
+
+        $user->loadMissing('teacher');
+        $teacher = $user->teacher;
         
         if (!$teacher) {
             return response()->json(['error' => 'Teacher profile not found'], 404);
@@ -237,7 +248,18 @@ class DashboardController extends Controller
      */
     public function student(Request $request)
     {
-        $student = $request->user()->student;
+        $user = $request->user();
+
+        if (!$user) {
+            return response()->json(['error' => 'Unauthenticated'], 401);
+        }
+
+        if ($user->role !== 'student') {
+            return response()->json(['error' => 'Forbidden'], 403);
+        }
+
+        $user->loadMissing('student');
+        $student = $user->student;
         
         if (!$student) {
             return response()->json(['error' => 'Student profile not found'], 404);

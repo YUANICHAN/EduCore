@@ -31,117 +31,11 @@ import {
 } from 'chart.js';
 import classService from '../../service/classService';
 import reportService from '../../service/reportService';
+import authService from '../../service/authService';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Filler, Title, Tooltip, Legend);
 
-// Fallback data for development/demo
-const getFallbackClassesData = () => [
-  {
-    id: 'math101',
-    title: 'Mathematics 101',
-    code: 'MATH101',
-    section: 'Section A',
-    schedule: 'MWF · 9:00 - 10:30 AM · Room 201',
-    academicYear: 'AY 2024-2025',
-    semester: '1st Semester',
-    gradeDistribution: { A: 8, B: 12, C: 10, D: 5, F: 2 },
-    classAverage: 82.5,
-    highestScore: 98,
-    lowestScore: 58,
-    passRate: 87,
-    attendanceMetrics: {
-      average: 94,
-      trend: [92, 93, 94, 93, 95, 94, 94],
-      lateCount: 8,
-      absentCount: 7,
-    },
-    performanceTrend: [
-      { week: 'W1', average: 76 },
-      { week: 'W2', average: 79 },
-      { week: 'W3', average: 81 },
-      { week: 'W4', average: 82 },
-      { week: 'W5', average: 84 },
-      { week: 'W6', average: 83 },
-      { week: 'W7', average: 82.5 },
-    ],
-    keyInsights: [
-      'Class average improved by 8.5% over the past 7 weeks',
-      'Attendance rate above 90% indicates strong engagement',
-      '37% students performing at A-B level',
-      'Early intervention recommended for 5 D-F performers',
-    ],
-  },
-  {
-    id: 'phys102',
-    title: 'Physics Laboratory',
-    code: 'PHYS102',
-    section: 'Section B',
-    schedule: 'TTH · 11:00 AM - 1:00 PM · Lab 3',
-    academicYear: 'AY 2024-2025',
-    semester: '1st Semester',
-    gradeDistribution: { A: 7, B: 10, C: 8, D: 4, F: 1 },
-    classAverage: 80.2,
-    highestScore: 96,
-    lowestScore: 62,
-    passRate: 88,
-    attendanceMetrics: {
-      average: 92,
-      trend: [90, 91, 92, 91, 92, 92, 92],
-      lateCount: 6,
-      absentCount: 5,
-    },
-    performanceTrend: [
-      { week: 'W1', average: 75 },
-      { week: 'W2', average: 77 },
-      { week: 'W3', average: 79 },
-      { week: 'W4', average: 80 },
-      { week: 'W5', average: 81 },
-      { week: 'W6', average: 80.5 },
-      { week: 'W7', average: 80.2 },
-    ],
-    keyInsights: [
-      'Lab performance steady with consistent attendance',
-      'Practical exams show strong grasp of concepts',
-      '42% of class scoring in A-B range',
-      'Late submissions trending downward',
-    ],
-  },
-  {
-    id: 'chem101',
-    title: 'Chemistry Lecture',
-    code: 'CHEM101',
-    section: 'Section A',
-    schedule: 'MWF · 1:00 - 2:30 PM · Room 305',
-    academicYear: 'AY 2024-2025',
-    semester: '1st Semester',
-    gradeDistribution: { A: 9, B: 14, C: 12, D: 4, F: 2 },
-    classAverage: 83.1,
-    highestScore: 99,
-    lowestScore: 55,
-    passRate: 89,
-    attendanceMetrics: {
-      average: 95,
-      trend: [93, 94, 95, 95, 96, 95, 95],
-      lateCount: 4,
-      absentCount: 3,
-    },
-    performanceTrend: [
-      { week: 'W1', average: 78 },
-      { week: 'W2', average: 80 },
-      { week: 'W3', average: 82 },
-      { week: 'W4', average: 83 },
-      { week: 'W5', average: 84 },
-      { week: 'W6', average: 83.5 },
-      { week: 'W7', average: 83.1 },
-    ],
-    keyInsights: [
-      'Highest class average among managed sections',
-      'Exceptional attendance with minimal absences',
-      '50% of students achieving A-B grades',
-      'Consistent upward trend in weekly performance',
-    ],
-  },
-];
+// No fallback data - use real data only
 
 function TeacherReports() {
   const [activeItem, setActiveItem] = useState('Reports');
@@ -155,19 +49,31 @@ function TeacherReports() {
     setLoading(true);
     setError(null);
     try {
-      const response = await classService.getAll();
-      const classes = response.data || response || [];
+      const user = authService.getCurrentUser();
+      const response = await classService.getAll({
+        per_page: 1000,
+        status: 'active',
+        ...(user?.teacher_id ? { teacher_id: user.teacher_id } : {}),
+      });
+      const payload = response?.data ?? response;
+      const classes = Array.isArray(payload) ? payload : (Array.isArray(payload?.data) ? payload.data : []);
+
+      const asText = (value, fallback = '') => {
+        if (value === null || value === undefined) return fallback;
+        if (typeof value === 'string' || typeof value === 'number') return String(value);
+        return fallback;
+      };
       
       // Map API response to report format with mock metrics
       // In production, this would come from a proper reports endpoint
       const mappedData = classes.map((cls, idx) => ({
         id: cls.id?.toString() || `class-${idx}`,
-        title: cls.subject?.name || cls.subject_name || `Class ${idx + 1}`,
-        code: cls.subject?.code || cls.subject_code || `CODE${idx + 1}`,
-        section: cls.section?.name || cls.section_name || `Section ${String.fromCharCode(65 + idx)}`,
+        title: asText(cls.subject?.subject_name) || asText(cls.subject?.name) || asText(cls.subject_name) || `Class ${idx + 1}`,
+        code: asText(cls.subject?.subject_code) || asText(cls.subject?.code) || asText(cls.subject_code) || `CODE${idx + 1}`,
+        section: asText(cls.section?.section_code) || asText(cls.section?.name) || asText(cls.section_name) || `Section ${String.fromCharCode(65 + idx)}`,
         schedule: cls.schedule || cls.time_slot || 'MWF · 9:00 - 10:30 AM · TBA',
-        academicYear: cls.academic_year?.name || 'AY 2024-2025',
-        semester: cls.semester || '1st Semester',
+        academicYear: asText(cls.academic_year?.year_code) || asText(cls.academic_year?.name) || 'AY 2024-2025',
+        semester: asText(cls.subject?.semester) || asText(cls.semester) || '1st Semester',
         // These would come from a proper reports API
         gradeDistribution: cls.grade_distribution || { A: 8, B: 12, C: 10, D: 5, F: 2 },
         classAverage: cls.class_average || 82.5,
@@ -197,11 +103,11 @@ function TeacherReports() {
         ],
       }));
       
-      setClassesData(mappedData.length > 0 ? mappedData : getFallbackClassesData());
+      setClassesData(mappedData.length > 0 ? mappedData : []);
     } catch (err) {
       console.error('Failed to fetch classes:', err);
       setError('Failed to load report data');
-      setClassesData(getFallbackClassesData());
+      setClassesData([]);
     } finally {
       setLoading(false);
     }

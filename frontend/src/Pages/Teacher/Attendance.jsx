@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import Sidebar from '../../Components/Teacher/Sidebar.jsx';
 import attendanceService from '../../service/attendanceService';
 import classService from '../../service/classService';
+import authService from '../../service/authService';
 import {
   UserCheck,
   UserX,
@@ -45,26 +46,40 @@ function TeacherAttendance() {
     setLoading(true);
     setError(null);
     try {
-      const response = await classService.getAll({ teacher: true });
-      const classesData = (response.data || response || []).map(c => ({
+      const user = authService.getCurrentUser();
+      const response = await classService.getAll({
+        per_page: 1000,
+        status: 'active',
+        ...(user?.teacher_id ? { teacher_id: user.teacher_id } : {}),
+      });
+
+      const payload = response?.data ?? response;
+      const classRows = Array.isArray(payload) ? payload : (Array.isArray(payload?.data) ? payload.data : []);
+
+      const asText = (value, fallback = '') => {
+        if (value === null || value === undefined) return fallback;
+        if (typeof value === 'string' || typeof value === 'number') return String(value);
+        return fallback;
+      };
+
+      const classesData = classRows.map(c => ({
         id: c.id,
-        code: c.subject_code || c.code || '',
-        name: c.subject_name || c.name || '',
-        section: c.section_name || c.section || '',
-        schedule: c.schedule || 'TBD',
-        students: c.students_count || 0,
+        code: asText(c.subject?.subject_code) || asText(c.subject_code) || asText(c.code) || 'N/A',
+        name: asText(c.subject?.subject_name) || asText(c.subject_name) || asText(c.name) || 'Class',
+        section: asText(c.section?.section_code) || asText(c.section_name) || asText(c.section) || 'N/A',
+        schedule: asText(c.schedule) || (
+          c.schedules?.[0]
+            ? `${asText(c.schedules[0]?.day_of_week, 'TBD')} ${asText(c.schedules[0]?.time_start, '')}${c.schedules[0]?.time_end ? ` - ${asText(c.schedules[0]?.time_end)}` : ''}`.trim()
+            : 'TBD'
+        ),
+        students: Number(c.enrolled_students_count ?? c.enrollments_count ?? c.students_count ?? c.enrolled_count ?? 0),
       }));
       
-      setClasses(classesData.length > 0 ? classesData : [
-        { id: 1, code: 'MATH101', name: 'Mathematics 101', section: 'A', schedule: 'MWF 9:00-10:30', students: 42 },
-        { id: 2, code: 'PHYS102', name: 'Physics Laboratory', section: 'B', schedule: 'TTH 2:00-3:30', students: 38 },
-      ]);
+      setClasses(classesData);
     } catch (err) {
       console.error('Error fetching classes:', err);
-      setClasses([
-        { id: 1, code: 'MATH101', name: 'Mathematics 101', section: 'A', schedule: 'MWF 9:00-10:30', students: 42 },
-        { id: 2, code: 'PHYS102', name: 'Physics Laboratory', section: 'B', schedule: 'TTH 2:00-3:30', students: 38 },
-      ]);
+      // Set empty array on error - no fallback
+      setClasses([]);
     } finally {
       setLoading(false);
     }
@@ -81,12 +96,20 @@ function TeacherAttendance() {
         attendanceService.getByClassAndDate(selectedClassId, selectedDate)
       ]);
 
-      const studentsData = (studentsRes.data || studentsRes || []).map(s => ({
+      const enrollmentRows = Array.isArray(studentsRes?.data)
+        ? studentsRes.data
+        : Array.isArray(studentsRes)
+          ? studentsRes
+          : [];
+
+      const studentsData = enrollmentRows.map(row => {
+        const s = row.student || row;
+        return {
         id: s.id,
         name: `${s.first_name || ''} ${s.last_name || ''}`.trim() || s.name || 'Unknown',
         studentNumber: s.student_number || s.number || 'N/A',
         status: 'present', // default
-      }));
+      }});
 
       // Map existing attendance records
       const attendanceRecords = attendanceRes.data || attendanceRes || [];
@@ -99,20 +122,11 @@ function TeacherAttendance() {
         }
       });
 
-      setStudents(studentsData.length > 0 ? studentsData : [
-        { id: 1, name: 'Adam Apple', studentNumber: 'STU-001', status: 'present' },
-        { id: 2, name: 'Leslie Gaon', studentNumber: 'STU-002', status: 'present' },
-        { id: 3, name: 'Julie Smithson', studentNumber: 'STU-003', status: 'late' },
-      ]);
+      setStudents(studentsData);
     } catch (err) {
       console.error('Error fetching attendance:', err);
-      // Fallback sample data
-      setStudents([
-        { id: 1, name: 'Adam Apple', studentNumber: 'STU-001', status: 'present' },
-        { id: 2, name: 'Leslie Gaon', studentNumber: 'STU-002', status: 'present' },
-        { id: 3, name: 'Julie Smithson', studentNumber: 'STU-003', status: 'late' },
-        { id: 4, name: 'Mark Johnson', studentNumber: 'STU-004', status: 'absent' },
-      ]);
+      // Set empty array on error - no fallback
+      setStudents([]);
     } finally {
       setLoading(false);
     }
@@ -218,7 +232,7 @@ function TeacherAttendance() {
   };
 
   return (
-    <div className="flex min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
+    <div className="flex min-h-screen bg-linear-to-br from-slate-50 via-blue-50 to-indigo-50">
       <Sidebar activeItem={activeItem} setActiveItem={setActiveItem} />
       
       <main className="flex-1 p-8 ml-64">

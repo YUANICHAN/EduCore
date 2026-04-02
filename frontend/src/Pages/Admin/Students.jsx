@@ -25,7 +25,6 @@ import {
   Filter,
   ChevronDown,
   ChevronRight,
-  Home,
   GraduationCap,
   Loader2,
   AlertCircle,
@@ -452,58 +451,52 @@ function Students() {
           </div>
 
           {/* Breadcrumb Navigation */}
-          <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-4 mb-6">
-            <div className="flex items-center space-x-2 text-sm flex-wrap">
-              <button
-                onClick={navigateToPrograms}
-                className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg transition-colors ${
-                  drillDownLevel === "programs"
-                    ? "bg-blue-100 text-blue-700 font-semibold"
-                    : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-                }`}
-              >
-                <Home className="w-4 h-4" />
-                <span>Students</span>
-              </button>
+          <div className="mb-6">
+            <div className="flex items-center text-sm text-gray-500 mb-2 flex-wrap gap-y-1">
+              <span>Admin</span>
+              <ChevronRight className="w-4 h-4 mx-1" />
+              {drillDownLevel === "programs" ? (
+                <span className="text-gray-900 font-medium">Students</span>
+              ) : (
+                <button onClick={navigateToPrograms} className="hover:text-blue-600 transition-colors">Students</button>
+              )}
 
               {selectedProgram && (
                 <>
-                  <ChevronRight className="w-4 h-4 text-gray-400" />
-                  <button
-                    onClick={() => navigateToYears(selectedProgram)}
-                    className={`px-3 py-1.5 rounded-lg transition-colors ${
-                      drillDownLevel === "years"
-                        ? "bg-blue-100 text-blue-700 font-semibold"
-                        : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-                    }`}
-                  >
-                    {selectedProgram.program_code || selectedProgram.program_name}
-                  </button>
+                  <ChevronRight className="w-4 h-4 mx-1" />
+                  {drillDownLevel === "years" ? (
+                    <span className="text-gray-900 font-medium">{selectedProgram.program_code || selectedProgram.program_name}</span>
+                  ) : (
+                    <button
+                      onClick={() => navigateToYears(selectedProgram)}
+                      className="hover:text-blue-600 transition-colors"
+                    >
+                      {selectedProgram.program_code || selectedProgram.program_name}
+                    </button>
+                  )}
                 </>
               )}
 
               {selectedYear && (
                 <>
-                  <ChevronRight className="w-4 h-4 text-gray-400" />
-                  <button
-                    onClick={() => navigateToSections(selectedYear)}
-                    className={`px-3 py-1.5 rounded-lg transition-colors ${
-                      drillDownLevel === "sections"
-                        ? "bg-blue-100 text-blue-700 font-semibold"
-                        : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-                    }`}
-                  >
-                    {selectedYear}
-                  </button>
+                  <ChevronRight className="w-4 h-4 mx-1" />
+                  {drillDownLevel === "sections" ? (
+                    <span className="text-gray-900 font-medium">{selectedYear}</span>
+                  ) : (
+                    <button
+                      onClick={() => navigateToSections(selectedYear)}
+                      className="hover:text-blue-600 transition-colors"
+                    >
+                      {selectedYear}
+                    </button>
+                  )}
                 </>
               )}
 
               {selectedSection && (
                 <>
-                  <ChevronRight className="w-4 h-4 text-gray-400" />
-                  <span className="px-3 py-1.5 bg-blue-100 text-blue-700 font-semibold rounded-lg">
-                    {selectedSection.section_code || 'Section'}
-                  </span>
+                  <ChevronRight className="w-4 h-4 mx-1" />
+                  <span className="text-gray-900 font-medium">{selectedSection.section_code || 'Section'}</span>
                 </>
               )}
             </div>

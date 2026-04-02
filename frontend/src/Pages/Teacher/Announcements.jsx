@@ -18,31 +18,9 @@ import {
 } from 'lucide-react';
 import classService from '../../service/classService';
 import announcementService from '../../service/announcementService';
+import authService from '../../service/authService';
 
-// Fallback data
-const getFallbackClassesData = () => [
-  {
-    id: 'math101',
-    title: 'Mathematics 101',
-    code: 'MATH101',
-    section: 'Section A',
-    schedule: 'MWF · 9:00 - 10:30 AM · Room 201',
-    studentCount: 35,
-    announcements: [
-      {
-        id: 1,
-        title: 'Midterm Exam Schedule Released',
-        content: 'The midterm exam for this course has been scheduled for next week.',
-        date: '2024-01-15',
-        time: '09:00 AM',
-        author: 'Prof. Johnson',
-        viewed: 28,
-        totalStudents: 35,
-        attachments: ['Midterm_Study_Guide.pdf'],
-      },
-    ],
-  },
-];
+// No fallback data - use real data or empty arrays
 
 function TeacherAnnouncements() {
   const [activeItem, setActiveItem] = useState('Announcements');
@@ -68,8 +46,20 @@ function TeacherAnnouncements() {
     setLoading(true);
     setError(null);
     try {
-      const classResponse = await classService.getAll();
-      const classes = classResponse.data || classResponse || [];
+      const user = authService.getCurrentUser();
+      const classResponse = await classService.getAll({
+        per_page: 1000,
+        status: 'active',
+        ...(user?.teacher_id ? { teacher_id: user.teacher_id } : {}),
+      });
+      const classPayload = classResponse?.data ?? classResponse;
+      const classes = Array.isArray(classPayload) ? classPayload : (Array.isArray(classPayload?.data) ? classPayload.data : []);
+
+      const asText = (value, fallback = '') => {
+        if (value === null || value === undefined) return fallback;
+        if (typeof value === 'string' || typeof value === 'number') return String(value);
+        return fallback;
+      };
       
       // Fetch announcements for each class
       const classesWithAnnouncements = await Promise.all(
@@ -77,7 +67,10 @@ function TeacherAnnouncements() {
           let announcements = [];
           try {
             const annResponse = await announcementService.getByClass(cls.id);
-            announcements = (annResponse.data || annResponse || []).map(ann => ({
+            const annPayload = annResponse?.data ?? annResponse;
+            const annRows = Array.isArray(annPayload) ? annPayload : (Array.isArray(annPayload?.data) ? annPayload.data : []);
+
+            announcements = annRows.map(ann => ({
               id: ann.id,
               title: ann.title,
               content: ann.content || ann.body || ann.message || '',
@@ -99,21 +92,21 @@ function TeacherAnnouncements() {
           
           return {
             id: cls.id,
-            title: cls.subject?.name || cls.name || cls.title || 'Class',
-            code: cls.subject?.code || cls.code || 'N/A',
-            section: cls.section?.name || cls.section || 'Section',
-            schedule: cls.schedule || `${cls.days || 'TBD'} · ${cls.time || 'TBD'} · ${cls.room || 'TBD'}`,
-            studentCount: cls.student_count || cls.studentCount || 0,
+            title: asText(cls.subject?.subject_name) || asText(cls.subject?.name) || asText(cls.name) || asText(cls.title) || 'Class',
+            code: asText(cls.subject?.subject_code) || asText(cls.subject?.code) || asText(cls.code) || 'N/A',
+            section: asText(cls.section?.section_code) || asText(cls.section?.name) || asText(cls.section_name) || asText(cls.section) || 'Section',
+            schedule: asText(cls.schedule) || `${asText(cls.days, 'TBD')} · ${asText(cls.time, 'TBD')} · ${asText(cls.room, 'TBD')}`,
+            studentCount: Number(cls.enrolled_students_count ?? cls.enrollments_count ?? cls.student_count ?? cls.studentCount ?? 0),
             announcements,
           };
         })
       );
       
-      setClassesData(classesWithAnnouncements.length > 0 ? classesWithAnnouncements : getFallbackClassesData());
+      setClassesData(classesWithAnnouncements.length > 0 ? classesWithAnnouncements : []);
     } catch (err) {
       console.error('Failed to fetch classes:', err);
       setError('Failed to load classes');
-      setClassesData(getFallbackClassesData());
+      setClassesData([]);
     } finally {
       setLoading(false);
     }

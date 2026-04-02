@@ -22,8 +22,9 @@ const transformToBackend = (data) => {
 
 const buildProgramPayload = (data, isUpdate = false) => {
   const transformed = transformToBackend(data);
+  const hasProgramImageFile = typeof File !== 'undefined' && transformed.program_image instanceof File;
 
-  if (transformed.program_image instanceof File) {
+  if (hasProgramImageFile) {
     const formData = new FormData();
 
     if (isUpdate) {
@@ -39,6 +40,11 @@ const buildProgramPayload = (data, isUpdate = false) => {
 
     formData.append('program_image', transformed.program_image, transformed.program_image.name);
     return formData;
+  }
+
+  // Prevent accidental non-file values (string/object/null) from being sent.
+  if ('program_image' in transformed) {
+    delete transformed.program_image;
   }
 
   return transformed;

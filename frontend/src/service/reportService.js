@@ -101,6 +101,18 @@ const reportService = {
     const response = await api.post('/reports/generate/performance', params);
     return response.data;
   },
+
+  /**
+   * Export report content to downloadable file.
+   * @param {string} format - csv|excel|pdf
+   * @param {Object} payload
+   * @returns {Promise}
+   */
+  exportGeneratedReport: async (format, payload) => {
+    return api.post(`/reports/export/${format}`, payload, {
+      responseType: 'blob',
+    });
+  },
 };
 
 export default reportService;

@@ -1,10 +1,24 @@
-import '../../App.css';
+﻿import '../../App.css';
 import { useMemo, useState } from "react";
 import Sidebar from "../../Components/Admin/Sidebar.jsx";
 import programService from "../../service/programService";
 import departmentService from "../../service/departmentService";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Swal from 'sweetalert2';
+import { validateForm, validationSchemas, getFieldError, hasFieldError } from "../../utils/validationUtils.js";
+import { exportToCSV, exportToExcel, formatDataForExport, exportConfigs } from "../../utils/exportUtils.js";
+import {
+  initializeSelection,
+  toggleItemSelection,
+  selectAllItems,
+  deselectAllItems,
+  getSelectionCount,
+  getSelectedItems,
+  createBulkConfirmation,
+  formatBulkResults,
+  bulkUpdateStatus,
+  bulkDelete,
+} from "../../utils/bulkOperationsUtils.js";
 import {
   BookOpen,
   Users,
@@ -22,6 +36,7 @@ import {
   AlertCircle,
   X,
   Trash2,
+  Download,
 } from "lucide-react";
 
 function Course() {
@@ -61,6 +76,8 @@ function Course() {
   });
   const [formLoading, setFormLoading] = useState(false);
   const [formError, setFormError] = useState(null);
+  const [formErrors, setFormErrors] = useState({});
+  const [selectedPrograms, setSelectedPrograms] = useState(initializeSelection([]));
 
   const departmentsQuery = useQuery({
     queryKey: ['departments'],
@@ -79,12 +96,28 @@ function Course() {
     staleTime: 5 * 60 * 1000,
   });
 
+  const resolveDepartmentLabel = (program) => {
+    if (typeof program.department === 'string' && program.department.trim()) {
+      return program.department;
+    }
+
+    if (program.department && typeof program.department === 'object') {
+      return program.department.name || program.department.code || '';
+    }
+
+    if (program.department_name) {
+      return program.department_name;
+    }
+
+    return '';
+  };
+
   const mapProgram = (program) => ({
     id: program.id,
     code: program.code || program.program_code || '',
     name: program.name || program.program_name || '',
     description: program.description || '',
-    department: program.department || '',
+    department: resolveDepartmentLabel(program),
     image: resolveImageUrl(program.program_image || program.image) || 'https://images.unsplash.com/photo-1517694712202-14dd9538aa97?w=500&q=80',
     rawImage: program.program_image || null,
     durationYears: program.duration_years || program.durationYears || 4,
@@ -111,6 +144,15 @@ function Course() {
     e.preventDefault();
     setFormLoading(true);
     setFormError(null);
+
+    // Validate form
+    const validation = validateForm(formData, validationSchemas.program);
+    if (!validation.isValid) {
+      setFormErrors(validation.errors);
+      setFormLoading(false);
+      return;
+    }
+    setFormErrors({});
 
     try {
       const submissionData = {
@@ -150,6 +192,15 @@ function Course() {
     e.preventDefault();
     setFormLoading(true);
     setFormError(null);
+
+    // Validate form
+    const validation = validateForm(formData, validationSchemas.program);
+    if (!validation.isValid) {
+      setFormErrors(validation.errors);
+      setFormLoading(false);
+      return;
+    }
+    setFormErrors({});
 
     try {
       const submissionData = {
@@ -196,6 +247,63 @@ function Course() {
       setFormError(err.response?.data?.message || 'Failed to delete program');
     } finally {
       setFormLoading(false);
+    }
+  };
+
+  // Export handlers
+  const handleExportCSV = () => {
+    const mapped = formatDataForExport(filteredCourses, exportConfigs.program.mapping);
+    exportToCSV(mapped, exportConfigs.program.filename);
+  };
+
+  const handleExportExcel = () => {
+    const mapped = formatDataForExport(filteredCourses, exportConfigs.program.mapping);
+    exportToExcel(mapped, exportConfigs.program.filename);
+  };
+
+  // Bulk operations handlers
+  const handleToggleSelection = (courseId) => {
+    setSelectedPrograms(toggleItemSelection(selectedPrograms, courseId));
+  };
+
+  const handleSelectAll = () => {
+    const allIds = filteredCourses.map(c => c.id);
+    setSelectedPrograms(selectAllItems(allIds));
+  };
+
+  const handleDeselectAll = () => {
+    setSelectedPrograms(deselectAllItems());
+  };
+
+  const handleBulkDelete = async () => {
+    const selected = getSelectedItems(selectedPrograms, filteredCourses, 'id');
+    const confirmation = createBulkConfirmation('program', selected.length);
+
+    const result = await Swal.fire(confirmation);
+    if (result.isConfirmed) {
+      setFormLoading(true);
+      try {
+        const results = await bulkDelete(selected, programService.delete);
+        const formatted = formatBulkResults(results);
+        
+        setSelectedPrograms(deselectAllItems());
+        await queryClient.invalidateQueries({ queryKey: ['programs'] });
+        
+        Swal.fire({
+          icon: 'success',
+          title: 'Bulk Delete Complete',
+          html: formatted,
+          timer: 3000,
+        });
+      } catch (err) {
+        Swal.fire({
+          icon: 'error',
+          title: 'Deletion failed',
+          text: err.message || 'Could not delete selected programs',
+        });
+      } finally {
+        setFormLoading(false);
+      }
     }
   };
 
@@ -284,8 +392,24 @@ function Course() {
             </div>
             <div className="flex items-center space-x-3">
               <button className="bg-white border border-gray-200 text-gray-700 px-4 py-2 rounded-lg flex items-center space-x-2 hover:bg-gray-50">
-                <Archive className="w-4 h-4" />
-                <span>Archive</span>
+                <Download className="w-4 h-4" />
+                <span>Export</span>
+              </button>
+              <button 
+                onClick={handleExportCSV}
+                className="bg-white border border-gray-200 text-gray-700 px-4 py-2 rounded-lg flex items-center space-x-2 hover:bg-gray-50"
+                title="Export as CSV"
+              >
+                <Download className="w-4 h-4" />
+                <span>CSV</span>
+              </button>
+              <button 
+                onClick={handleExportExcel}
+                className="bg-white border border-gray-200 text-gray-700 px-4 py-2 rounded-lg flex items-center space-x-2 hover:bg-gray-50"
+                title="Export as Excel"
+              >
+                <Download className="w-4 h-4" />
+                <span>Excel</span>
               </button>
               <button 
                 onClick={() => {
@@ -391,6 +515,33 @@ function Course() {
             </div>
           </div>
 
+          {/* Bulk Operations Toolbar */}
+          {getSelectionCount(selectedPrograms) > 0 && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-center justify-between">
+              <div className="flex items-center space-x-4">
+                <span className="font-semibold text-blue-600">
+                  {getSelectionCount(selectedPrograms)} selected
+                </span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={handleDeselectAll}
+                  className="px-3 py-1 text-sm border border-blue-300 text-blue-700 rounded hover:bg-blue-100"
+                >
+                  Deselect All
+                </button>
+                <button
+                  onClick={handleBulkDelete}
+                  disabled={formLoading}
+                  className="px-3 py-1 text-sm bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50 flex items-center space-x-1"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Delete</span>
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Courses */}
           {viewMode === "grid" ? (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -416,8 +567,8 @@ function Course() {
                       </p>
                     </div>
                     <div className="flex space-x-2">
-                      <button onClick={() => openEditModal(course)} className="text-gray-500 hover:text-blue-600" title="Edit program"><Edit className="w-4 h-4" /></button>
-                      <button onClick={() => openDeleteModal(course)} className="text-gray-500 hover:text-red-600" title="Delete program"><Trash2 className="w-4 h-4" /></button>
+                      <button onClick={() => openEditModal(course)} className="inline-flex items-center justify-center p-1.5 rounded-md text-blue-600 hover:text-blue-700 hover:bg-blue-50 transition-colors" title="Edit program"><Edit className="w-4 h-4" /></button>
+                      <button onClick={() => openDeleteModal(course)} className="inline-flex items-center justify-center p-1.5 rounded-md text-red-600 hover:text-red-700 hover:bg-red-50 transition-colors" title="Delete program"><Trash2 className="w-4 h-4" /></button>
                     </div>
                   </div>
 
@@ -428,7 +579,7 @@ function Course() {
                     </div>
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-gray-600">Totals</span>
-                      <span className="text-gray-900 font-medium">{course.totals.students} students · {course.totals.sections} sections · {course.totals.subjects} subjects</span>
+                      <span className="text-gray-900 font-medium">{course.totals.students} students - {course.totals.sections} sections - {course.totals.subjects} subjects</span>
                     </div>
 
                     <div className="border-t border-gray-200 pt-3">
@@ -461,6 +612,14 @@ function Course() {
               <table className="w-full">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600">
+                      <input
+                        type="checkbox"
+                        checked={getSelectionCount(selectedPrograms) > 0 && getSelectionCount(selectedPrograms) === filteredCourses.length}
+                        onChange={getSelectionCount(selectedPrograms) > 0 && getSelectionCount(selectedPrograms) === filteredCourses.length ? handleDeselectAll : handleSelectAll}
+                        className="w-4 h-4 cursor-pointer"
+                      />
+                    </th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600">Course</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600">Department</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600">Duration</th>
@@ -470,7 +629,15 @@ function Course() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {filteredCourses.map((course) => (
-                    <tr key={course.id} className="hover:bg-gray-50">
+                    <tr key={course.id} className={selectedPrograms[course.id] ? "bg-blue-50" : "hover:bg-gray-50"}>
+                      <td className="px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={!!selectedPrograms[course.id]}
+                          onChange={() => handleToggleSelection(course.id)}
+                          className="w-4 h-4 cursor-pointer"
+                        />
+                      </td>
                       <td className="px-4 py-3">
                         <div className="flex flex-col">
                           <span className="text-sm font-semibold text-gray-900">{course.code}</span>
@@ -480,11 +647,11 @@ function Course() {
                       <td className="px-4 py-3 text-sm text-gray-700">{course.department}</td>
                       <td className="px-4 py-3 text-sm text-gray-700">{course.durationYears} years</td>
                       <td className="px-4 py-3 text-sm text-gray-700">
-                        {course.totals.students} students · {course.totals.sections} sections · {course.totals.subjects} subjects
+                        {course.totals.students} students - {course.totals.sections} sections - {course.totals.subjects} subjects
                       </td>
                       <td className="px-4 py-3 text-right space-x-2">
-                        <button onClick={() => openEditModal(course)} className="text-gray-500 hover:text-blue-600" title="Edit program"><Edit className="w-4 h-4" /></button>
-                        <button onClick={() => openDeleteModal(course)} className="text-gray-500 hover:text-red-600" title="Delete program"><Trash2 className="w-4 h-4" /></button>
+                        <button onClick={() => openEditModal(course)} className="inline-flex items-center justify-center p-1.5 rounded-md text-blue-600 hover:text-blue-700 hover:bg-blue-50 transition-colors" title="Edit program"><Edit className="w-4 h-4" /></button>
+                        <button onClick={() => openDeleteModal(course)} className="inline-flex items-center justify-center p-1.5 rounded-md text-red-600 hover:text-red-700 hover:bg-red-50 transition-colors" title="Delete program"><Trash2 className="w-4 h-4" /></button>
                       </td>
                     </tr>
                   ))}
@@ -519,8 +686,11 @@ function Course() {
                         placeholder="e.g., BSIT"
                         value={formData.code}
                         onChange={(e) => setFormData({...formData, code: e.target.value})}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${hasFieldError(formErrors, 'code') ? 'border-red-500' : 'border-gray-300'}`}
                       />
+                      {hasFieldError(formErrors, 'code') && (
+                        <p className="text-red-600 text-xs mt-1">{getFieldError(formErrors, 'code')}</p>
+                      )}
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Program Name *</label>
@@ -530,8 +700,11 @@ function Course() {
                         placeholder="e.g., Bachelor of Science in Information Technology"
                         value={formData.name}
                         onChange={(e) => setFormData({...formData, name: e.target.value})}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${hasFieldError(formErrors, 'name') ? 'border-red-500' : 'border-gray-300'}`}
                       />
+                      {hasFieldError(formErrors, 'name') && (
+                        <p className="text-red-600 text-xs mt-1">{getFieldError(formErrors, 'name')}</p>
+                      )}
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Department *</label>
@@ -539,13 +712,16 @@ function Course() {
                         required
                         value={formData.department}
                         onChange={(e) => setFormData({...formData, department: e.target.value})}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${hasFieldError(formErrors, 'department') ? 'border-red-500' : 'border-gray-300'}`}
                       >
                         <option value="">Select</option>
                         {departments.map(d => (
                           <option key={d} value={d}>{d}</option>
                         ))}
                       </select>
+                      {hasFieldError(formErrors, 'department') && (
+                        <p className="text-red-600 text-xs mt-1">{getFieldError(formErrors, 'department')}</p>
+                      )}
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Duration (Years)</label>
@@ -662,8 +838,11 @@ function Course() {
                         required
                         value={formData.code}
                         onChange={(e) => setFormData({...formData, code: e.target.value})}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${hasFieldError(formErrors, 'code') ? 'border-red-500' : 'border-gray-300'}`}
                       />
+                      {hasFieldError(formErrors, 'code') && (
+                        <p className="text-red-600 text-xs mt-1">{getFieldError(formErrors, 'code')}</p>
+                      )}
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Program Name *</label>
@@ -672,8 +851,11 @@ function Course() {
                         required
                         value={formData.name}
                         onChange={(e) => setFormData({...formData, name: e.target.value})}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${hasFieldError(formErrors, 'name') ? 'border-red-500' : 'border-gray-300'}`}
                       />
+                      {hasFieldError(formErrors, 'name') && (
+                        <p className="text-red-600 text-xs mt-1">{getFieldError(formErrors, 'name')}</p>
+                      )}
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Department *</label>
@@ -681,13 +863,16 @@ function Course() {
                         required
                         value={formData.department}
                         onChange={(e) => setFormData({...formData, department: e.target.value})}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${hasFieldError(formErrors, 'department') ? 'border-red-500' : 'border-gray-300'}`}
                       >
                         <option value="">Select</option>
                         {departments.map(d => (
                           <option key={d} value={d}>{d}</option>
                         ))}
                       </select>
+                      {hasFieldError(formErrors, 'department') && (
+                        <p className="text-red-600 text-xs mt-1">{getFieldError(formErrors, 'department')}</p>
+                      )}
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Duration (Years)</label>
@@ -814,3 +999,5 @@ function Course() {
 }
 
 export default Course;
+
+

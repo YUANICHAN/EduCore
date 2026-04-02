@@ -5,9 +5,31 @@ namespace App\Http\Controllers;
 use App\Models\Department;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Storage;
 
 class DepartmentController extends Controller
 {
+    private function uploadBannerImage(Request $request, ?Department $department = null): ?string
+    {
+        if (!$request->hasFile('banner_image')) {
+            return null;
+        }
+
+        if ($department && $department->banner_image) {
+            if (str_starts_with($department->banner_image, 'storage/')) {
+                Storage::disk('public')->delete(str_replace('storage/', '', $department->banner_image));
+            } elseif (file_exists(public_path($department->banner_image))) {
+                @unlink(public_path($department->banner_image));
+            }
+        }
+
+        $file = $request->file('banner_image');
+        $filename = time() . '_' . uniqid() . '.' . $file->getClientOriginalExtension();
+        $storedPath = $file->storeAs('uploads/departments', $filename, 'public');
+
+        return 'storage/' . $storedPath;
+    }
+
     /**
      * Display a listing of departments.
      */
@@ -32,6 +54,7 @@ class DepartmentController extends Controller
 
         // Count relationships
         $query->withCount(['programs', 'teachers']);
+        $query->with(['programs:id,department_id,program_name,program_code']);
 
         // Sort
         $sortBy = $request->get('sort_by', 'name');
@@ -72,16 +95,7 @@ class DepartmentController extends Controller
 
         // Handle file upload
         if ($request->hasFile('banner_image')) {
-            $file = $request->file('banner_image');
-            $filename = time() . '_' . uniqid() . '.' . $file->getClientOriginalExtension();
-            $path = public_path() . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR . 'departments';
-            
-            if (!file_exists($path)) {
-                mkdir($path, 0777, true);
-            }
-            
-            $file->move($path, $filename);
-            $data['banner_image'] = 'uploads/departments/' . $filename;
+            $data['banner_image'] = $this->uploadBannerImage($request);
         }
 
         $department = Department::create($data);
@@ -128,21 +142,7 @@ class DepartmentController extends Controller
 
         // Handle file upload
         if ($request->hasFile('banner_image')) {
-            // Delete old banner if exists
-            if ($department->banner_image && file_exists(public_path($department->banner_image))) {
-                @unlink(public_path($department->banner_image));
-            }
-
-            $file = $request->file('banner_image');
-            $filename = time() . '_' . uniqid() . '.' . $file->getClientOriginalExtension();
-            $path = public_path() . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR . 'departments';
-            
-            if (!file_exists($path)) {
-                mkdir($path, 0777, true);
-            }
-            
-            $file->move($path, $filename);
-            $data['banner_image'] = 'uploads/departments/' . $filename;
+            $data['banner_image'] = $this->uploadBannerImage($request, $department);
         }
 
         $department->update($data);
@@ -174,13 +174,25 @@ class DepartmentController extends Controller
                     ], 422);
                 }
 
-                // Move all programs to target department
-                \App\Models\Program::where('department', $department->name)
-                    ->update(['department' => $targetDepartment->name]);
+                // Move all programs to target department using FK as source of truth.
+                \App\Models\Program::where(function ($query) use ($department) {
+                    $query->where('department_id', $department->id)
+                        ->orWhere('department', $department->name)
+                        ->orWhere('department', $department->code);
+                })->update([
+                    'department_id' => $targetDepartment->id,
+                    'department' => $targetDepartment->name,
+                ]);
 
-                // Move all teachers to target department
-                \App\Models\Teachers::where('department', $department->name)
-                    ->update(['department' => $targetDepartment->name]);
+                // Move all teachers to target department using FK as source of truth.
+                \App\Models\Teachers::where(function ($query) use ($department) {
+                    $query->where('department_id', $department->id)
+                        ->orWhere('department', $department->name)
+                        ->orWhere('department', $department->code);
+                })->update([
+                    'department_id' => $targetDepartment->id,
+                    'department' => $targetDepartment->name,
+                ]);
 
                 $department->delete();
 
@@ -201,6 +213,14 @@ class DepartmentController extends Controller
                 'teachers_count' => $department->teachers_count,
                 'requires_reassignment' => true
             ], 422);
+        }
+
+        if ($department->banner_image) {
+            if (str_starts_with($department->banner_image, 'storage/')) {
+                Storage::disk('public')->delete(str_replace('storage/', '', $department->banner_image));
+            } elseif (file_exists(public_path($department->banner_image))) {
+                @unlink(public_path($department->banner_image));
+            }
         }
 
         $department->delete();

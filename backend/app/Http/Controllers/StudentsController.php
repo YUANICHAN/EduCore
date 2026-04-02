@@ -10,6 +10,7 @@ use App\Models\Attendance;
 use App\Models\Schedule;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 
 class StudentsController extends Controller
 {
@@ -18,7 +19,13 @@ class StudentsController extends Controller
      */
     public function index(Request $request)
     {
-        $query = Students::with(['program', 'section'])->withCount('enrollments');
+        $query = Students::with(['program', 'section'])
+            ->withCount('enrollments')
+            ->withCount([
+                'enrollments as active_enrollments_count' => function ($q) {
+                    $q->where('status', 'enrolled');
+                }
+            ]);
         
         // Search functionality
         if ($request->has('search')) {
@@ -49,9 +56,11 @@ class StudentsController extends Controller
             $query->where('section_id', $request->section_id);
         }
 
-        // Filter unassigned students only (students without a section)
+        // Filter unassigned students only (students without any active class enrollment)
         if ($request->boolean('unassigned_only')) {
-            $query->whereNull('section_id');
+            $query->whereDoesntHave('enrollments', function ($q) {
+                $q->where('status', 'enrolled');
+            });
         }
         
         // Filter by academic year
@@ -61,7 +70,18 @@ class StudentsController extends Controller
         
         // Filter by enrollment status
         if ($request->has('enrollment_status')) {
-            $query->where('enrollment_status', $request->enrollment_status);
+            $status = strtolower((string) $request->enrollment_status);
+            if ($status === 'enrolled') {
+                $query->whereHas('enrollments', function ($q) {
+                    $q->where('status', 'enrolled');
+                });
+            } elseif ($status === 'unassigned') {
+                $query->whereDoesntHave('enrollments', function ($q) {
+                    $q->where('status', 'enrolled');
+                });
+            } else {
+                $query->where('enrollment_status', $request->enrollment_status);
+            }
         }
         
         // Filter by account status
@@ -77,6 +97,13 @@ class StudentsController extends Controller
         // Pagination
         $perPage = $request->get('per_page', 15);
         $students = $query->paginate($perPage);
+
+        // Keep enrollment_status in sync with real active class enrollments.
+        foreach ($students as $student) {
+            $student->enrollment_status = ($student->active_enrollments_count ?? 0) > 0
+                ? 'enrolled'
+                : 'unassigned';
+        }
         
         return response()->json($students);
     }
@@ -126,8 +153,8 @@ class StudentsController extends Controller
                 if (request()->hasFile('profile_image')) {
                     $image = request()->file('profile_image');
                     $imageName = time() . '_' . uniqid() . '.' . $image->getClientOriginalExtension();
-                    $image->move(public_path('uploads/students'), $imageName);
-                    $validated['profile_image'] = 'uploads/students/' . $imageName;
+                    $storedPath = $image->storeAs('uploads/students', $imageName, 'public');
+                    $validated['profile_image'] = 'storage/' . $storedPath;
                 }
 
                 // Create User account first
@@ -209,14 +236,18 @@ class StudentsController extends Controller
         // Handle profile image upload
         if (request()->hasFile('profile_image')) {
             // Delete old image if exists
-            if ($student->profile_image && file_exists(public_path($student->profile_image))) {
-                unlink(public_path($student->profile_image));
+            if ($student->profile_image) {
+                if (str_starts_with($student->profile_image, 'storage/')) {
+                    Storage::disk('public')->delete(str_replace('storage/', '', $student->profile_image));
+                } elseif (file_exists(public_path($student->profile_image))) {
+                    unlink(public_path($student->profile_image));
+                }
             }
 
             $image = request()->file('profile_image');
             $imageName = time() . '_' . uniqid() . '.' . $image->getClientOriginalExtension();
-            $image->move(public_path('uploads/students'), $imageName);
-            $validated['profile_image'] = 'uploads/students/' . $imageName;
+            $storedPath = $image->storeAs('uploads/students', $imageName, 'public');
+            $validated['profile_image'] = 'storage/' . $storedPath;
         }
 
         $student->update($validated);

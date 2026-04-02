@@ -15,167 +15,9 @@ import {
   Loader2,
 } from 'lucide-react';
 import scheduleService from '../../service/scheduleService';
+import authService from '../../service/authService';
 
-// Fallback data for development/demo
-const getFallbackScheduleData = () => [
-  {
-    day: 'Monday',
-    date: '2024-01-15',
-    classes: [
-      {
-        id: 1,
-        subject: 'Mathematics 101',
-        code: 'MATH101',
-        section: 'Section A',
-        time: '09:00 - 10:30 AM',
-        room: 'Room 201',
-        building: 'Science Building',
-        students: 35,
-        reminders: true,
-      },
-      {
-        id: 2,
-        subject: 'Mathematics 201',
-        code: 'MATH201',
-        section: 'Section B',
-        time: '11:00 AM - 12:30 PM',
-        room: 'Room 203',
-        building: 'Science Building',
-        students: 28,
-        reminders: false,
-      },
-    ],
-  },
-  {
-    day: 'Tuesday',
-    date: '2024-01-16',
-    classes: [
-      {
-        id: 3,
-        subject: 'Physics Lab',
-        code: 'PHYS102',
-        section: 'Section B',
-        time: '11:00 AM - 1:00 PM',
-        room: 'Lab 3',
-        building: 'Science Building',
-        students: 28,
-        reminders: true,
-      },
-      {
-        id: 4,
-        subject: 'Mathematics 101',
-        code: 'MATH101',
-        section: 'Section A',
-        time: '2:00 - 3:30 PM',
-        room: 'Room 201',
-        building: 'Science Building',
-        students: 35,
-        reminders: false,
-      },
-    ],
-  },
-  {
-    day: 'Wednesday',
-    date: '2024-01-17',
-    classes: [
-      {
-        id: 5,
-        subject: 'Chemistry Lecture',
-        code: 'CHEM101',
-        section: 'Section A',
-        time: '1:00 - 2:30 PM',
-        room: 'Room 305',
-        building: 'Science Building',
-        students: 42,
-        reminders: true,
-      },
-    ],
-  },
-  {
-    day: 'Thursday',
-    date: '2024-01-18',
-    classes: [
-      {
-        id: 6,
-        subject: 'Physics Lab',
-        code: 'PHYS102',
-        section: 'Section B',
-        time: '11:00 AM - 1:00 PM',
-        room: 'Lab 3',
-        building: 'Science Building',
-        students: 28,
-        reminders: false,
-      },
-      {
-        id: 7,
-        subject: 'Mathematics 201',
-        code: 'MATH201',
-        section: 'Section B',
-        time: '2:00 - 3:30 PM',
-        room: 'Room 203',
-        building: 'Science Building',
-        students: 28,
-        reminders: true,
-      },
-    ],
-  },
-  {
-    day: 'Friday',
-    date: '2024-01-19',
-    classes: [
-      {
-        id: 8,
-        subject: 'Mathematics 101',
-        code: 'MATH101',
-        section: 'Section A',
-        time: '09:00 - 10:30 AM',
-        room: 'Room 201',
-        building: 'Science Building',
-        students: 35,
-        reminders: false,
-      },
-      {
-        id: 9,
-        subject: 'Chemistry Lecture',
-        code: 'CHEM101',
-        section: 'Section A',
-        time: '1:00 - 2:30 PM',
-        room: 'Room 305',
-        building: 'Science Building',
-        students: 42,
-        reminders: true,
-      },
-    ],
-  },
-  {
-    day: 'Saturday',
-    date: '2024-01-20',
-    classes: [
-      {
-        id: 10,
-        subject: 'Mathematics 101 (Extension)',
-        code: 'MATH101E',
-        section: 'Section A',
-        time: '10:00 - 11:30 AM',
-        room: 'Room 201',
-        building: 'Science Building',
-        students: 35,
-        reminders: false,
-      },
-      {
-        id: 11,
-        subject: 'Physics Lab (Makeup)',
-        code: 'PHYS102M',
-        section: 'Section B',
-        time: '2:00 - 4:00 PM',
-        room: 'Lab 3',
-        building: 'Science Building',
-        students: 28,
-        reminders: true,
-      },
-    ],
-  },
-];
+// No fallback data - use real data only
 
 function TeacherSchedule() {
   const [activeItem, setActiveItem] = useState('Schedule');
@@ -194,8 +36,18 @@ function TeacherSchedule() {
     setLoading(true);
     setError(null);
     try {
-      const response = await scheduleService.getAll();
-      const schedules = response.data || response || [];
+      const user = authService.getCurrentUser();
+      const response = await scheduleService.getAll(
+        user?.teacher_id ? { teacher_id: user.teacher_id, per_page: 1000 } : { per_page: 1000 }
+      );
+      const payload = response?.data ?? response;
+      const schedules = Array.isArray(payload) ? payload : (Array.isArray(payload?.data) ? payload.data : []);
+
+      const asText = (value, fallback = '') => {
+        if (value === null || value === undefined) return fallback;
+        if (typeof value === 'string' || typeof value === 'number') return String(value);
+        return fallback;
+      };
       
       // Group schedules by day
       const dayMap = {};
@@ -212,13 +64,13 @@ function TeacherSchedule() {
         }
         dayMap[dayName].classes.push({
           id: schedule.id,
-          subject: schedule.subject?.name || schedule.class?.subject?.name || schedule.subject_name || 'Unknown',
-          code: schedule.subject?.code || schedule.class?.subject?.code || schedule.subject_code || 'N/A',
-          section: schedule.section?.name || schedule.class?.section?.name || `Section ${schedule.section || 'A'}`,
-          time: schedule.time_slot || `${schedule.start_time || '9:00 AM'} - ${schedule.end_time || '10:30 AM'}`,
-          room: schedule.room || schedule.room_number || 'TBA',
-          building: schedule.building || 'Main Building',
-          students: schedule.students_count || schedule.class?.students_count || 30,
+          subject: asText(schedule.subject?.subject_name) || asText(schedule.subject?.name) || asText(schedule.class?.subject?.subject_name) || asText(schedule.class?.subject?.name) || asText(schedule.subject_name) || 'Unknown',
+          code: asText(schedule.subject?.subject_code) || asText(schedule.subject?.code) || asText(schedule.class?.subject?.subject_code) || asText(schedule.class?.subject?.code) || asText(schedule.subject_code) || 'N/A',
+          section: asText(schedule.section?.section_code) || asText(schedule.class?.section?.section_code) || asText(schedule.section?.name) || asText(schedule.class?.section?.name) || `Section ${asText(schedule.section, 'A')}`,
+          time: asText(schedule.time_slot) || `${asText(schedule.time_start, '09:00')} - ${asText(schedule.time_end, '10:30')}`,
+          room: asText(schedule.room) || asText(schedule.room_number) || 'TBA',
+          building: asText(schedule.building) || 'Main Building',
+          students: Number(schedule.students_count ?? schedule.class?.enrolled_students_count ?? schedule.class?.enrollments_count ?? schedule.class?.students_count ?? 0),
           reminders: false
         });
       });
@@ -229,11 +81,11 @@ function TeacherSchedule() {
         .filter(day => dayMap[day])
         .map(day => dayMap[day]);
       
-      setScheduleData(result.length > 0 ? result : getFallbackScheduleData());
+      setScheduleData(result.length > 0 ? result : []);
     } catch (err) {
       console.error('Failed to fetch schedule:', err);
       setError('Failed to load schedule');
-      setScheduleData(getFallbackScheduleData());
+      setScheduleData([]);
     } finally {
       setLoading(false);
     }

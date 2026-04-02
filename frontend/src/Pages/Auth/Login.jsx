@@ -84,9 +84,12 @@ function Login() {
       if (err.response) {
         const status = err.response.status;
         const data = err.response.data;
+        const firstValidationError = data?.errors
+          ? Object.values(data.errors).flat()[0]
+          : null;
 
         if (status === 401 || status === 422) {
-          setError(data.message || 'Invalid email or password. Please try again.');
+          setError(firstValidationError || data.message || 'Invalid email or password. Please try again.');
         } else if (status === 429) {
           setError('Too many login attempts. Please try again later.');
         } else if (status === 403) {
@@ -192,9 +195,9 @@ function Login() {
           <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-xl">
             <p className="text-blue-800 text-sm font-medium mb-2">Demo Credentials:</p>
             <div className="text-blue-700 text-xs space-y-1">
-              <p>Student: student@educore.edu / password</p>
-              <p>Teacher: teacher@educore.edu / password</p>
-              <p>Admin: admin@educore.edu / password</p>
+              <p>Student: bsba-1A.student1@educore.edu / password123</p>
+              <p>Teacher: bsba.teacher1@educore.edu / password123</p>
+              <p>Admin: admin@educore.edu / password123</p>
             </div>
           </div>
 

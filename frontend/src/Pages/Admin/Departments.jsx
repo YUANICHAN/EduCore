@@ -23,6 +23,7 @@ import {
 function Departments() {
   const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api';
   const backendOrigin = apiBaseUrl.replace(/\/api\/?$/, '');
+  const DEFAULT_DEPARTMENT_BANNER = 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1200&q=80';
 
   const resolveImageUrl = (imagePath) => {
     if (!imagePath) return null;
@@ -67,6 +68,10 @@ function Departments() {
       color: d.color || 'blue',
       status: d.status || 'active',
       banner_image: d.banner_image,
+      bannerImageUrl: resolveImageUrl(d.banner_image) || DEFAULT_DEPARTMENT_BANNER,
+      programNames: (d.programs || [])
+        .map((p) => p.program_name || p.name || p.program_code || p.code)
+        .filter(Boolean),
       programsCount: d.programs_count || 0,
       teachersCount: d.teachers_count || 0,
     }));
@@ -415,11 +420,19 @@ function Departments() {
               {filteredDepartments.map((dept) => (
                 <div
                   key={dept.id}
-                  className="bg-white rounded-lg border border-gray-200 shadow-sm p-6 hover:shadow-lg transition-all"
+                  className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden hover:shadow-lg transition-all"
                 >
+                  <div className="h-36 overflow-hidden">
+                    <img
+                      src={dept.bannerImageUrl}
+                      alt={`${dept.name} banner`}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                  <div className="p-6">
                   <div className="flex items-start justify-between mb-4">
-                    <div className={`w-12 h-12 bg-${dept.color}-100 rounded-lg flex items-center justify-center`}>
-                      <Building2 className={`w-6 h-6 text-${dept.color}-600`} />
+                    <div className="text-xs font-semibold text-blue-700 bg-blue-50 px-2 py-1 rounded-md">
+                      {dept.code}
                     </div>
                     <div className="flex space-x-2">
                       <button
@@ -431,7 +444,7 @@ function Departments() {
                       </button>
                       <button
                         onClick={() => handleDelete(dept)}
-                        className="text-red-600 hover:text-red-800 relative"
+                        className="text-red-600 hover:text-red-800"
                         title={
                           dept.programsCount > 0 || dept.teachersCount > 0
                             ? `Delete (will require moving ${dept.programsCount} program(s) and ${dept.teachersCount} teacher(s))`
@@ -439,21 +452,19 @@ function Departments() {
                         }
                       >
                         <Trash2 className="w-5 h-5" />
-                        {(dept.programsCount > 0 || dept.teachersCount > 0) && (
-                          <span className="absolute -top-1 -right-1 w-3 h-3 bg-amber-500 rounded-full border border-white"></span>
-                        )}
                       </button>
                     </div>
                   </div>
-                  <h3 className="text-xl font-bold text-gray-900 mb-1">{dept.code}</h3>
-                  <p className="text-sm text-gray-600 mb-4">{dept.name}</p>
+                  <h3 className="text-xl font-bold text-gray-900 mb-1">{dept.name}</h3>
                   {dept.description && (
                     <p className="text-xs text-gray-500 mb-4 line-clamp-2">{dept.description}</p>
                   )}
                   <div className="flex items-center justify-between pt-4 border-t border-gray-100">
                     <div>
                       <span className="text-xs text-gray-600">Programs</span>
-                      <p className="text-lg font-bold text-blue-600">{dept.programsCount}</p>
+                      <p className="text-sm font-semibold text-blue-700 max-w-45 truncate" title={dept.programNames.join(', ')}>
+                        {dept.programNames.length > 0 ? dept.programNames.join(', ') : 'No programs'}
+                      </p>
                     </div>
                     <div>
                       <span className="text-xs text-gray-600">Teachers</span>
@@ -470,6 +481,7 @@ function Departments() {
                         {dept.status}
                       </span>
                     </div>
+                  </div>
                   </div>
                 </div>
               ))}
@@ -504,14 +516,20 @@ function Departments() {
                     <tr key={dept.id} className="hover:bg-gray-50">
                       <td className="px-4 py-3">
                         <div className="flex items-center">
-                          <div className={`w-8 h-8 bg-${dept.color}-100 rounded flex items-center justify-center mr-3`}>
-                            <Building2 className={`w-4 h-4 text-${dept.color}-600`} />
-                          </div>
+                          <img
+                            src={dept.bannerImageUrl}
+                            alt={`${dept.name} banner`}
+                            className="w-12 h-8 object-cover rounded mr-3 border border-gray-200"
+                          />
                           <span className="font-semibold text-gray-900">{dept.code}</span>
                         </div>
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-700">{dept.name}</td>
-                      <td className="px-4 py-3 text-sm text-gray-700">{dept.programsCount}</td>
+                      <td className="px-4 py-3 text-sm text-gray-700 max-w-xs">
+                        <span className="block truncate" title={dept.programNames.join(', ')}>
+                          {dept.programNames.length > 0 ? dept.programNames.join(', ') : 'No programs'}
+                        </span>
+                      </td>
                       <td className="px-4 py-3 text-sm text-gray-700">{dept.teachersCount}</td>
                       <td className="px-4 py-3">
                         <span
@@ -534,7 +552,7 @@ function Departments() {
                         </button>
                         <button
                           onClick={() => handleDelete(dept)}
-                          className="text-red-600 hover:text-red-800 relative inline-block"
+                          className="text-red-600 hover:text-red-800 inline-block"
                           title={
                             dept.programsCount > 0 || dept.teachersCount > 0
                               ? `Delete (will require moving ${dept.programsCount} program(s) and ${dept.teachersCount} teacher(s))`
@@ -542,9 +560,6 @@ function Departments() {
                           }
                         >
                           <Trash2 className="w-5 h-5 inline" />
-                          {(dept.programsCount > 0 || dept.teachersCount > 0) && (
-                            <span className="absolute -top-1 -right-1 w-3 h-3 bg-amber-500 rounded-full border border-white"></span>
-                          )}
                         </button>
                       </td>
                     </tr>

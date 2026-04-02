@@ -64,7 +64,7 @@ function Dashboard() {
                 // Set current year as default
                 const current = years.find(y => y.is_current) || years[0];
                 if (current) {
-                    setSelectedYear(current.year || `${current.start_year}-${current.end_year}`);
+                    setSelectedYear(current.year_code || current.year || `${current.start_year}-${current.end_year}`);
                 }
             } catch (err) {
                 console.error('Failed to fetch academic years:', err);
@@ -96,12 +96,12 @@ function Dashboard() {
             } catch (err) {
                 console.error('Failed to fetch dashboard:', err);
                 setError('Failed to load dashboard data.');
-                // Use fallback data
+                // Clear data on error - no fallback
                 setDashboardData({
-                    todaysClasses: 4,
-                    totalSubjects: 3,
-                    studentsEnrolled: 245,
-                    pendingGrades: 12,
+                    todaysClasses: 0,
+                    totalSubjects: 0,
+                    studentsEnrolled: 0,
+                    pendingGrades: 0,
                 });
             } finally {
                 setLoading(false);
@@ -163,8 +163,8 @@ function Dashboard() {
                         >
                             {academicYears.length > 0 ? (
                                 academicYears.map(year => (
-                                    <option key={year.id} value={year.year || `${year.start_year}-${year.end_year}`}>
-                                        AY {year.year || `${year.start_year}-${year.end_year}`}
+                                    <option key={year.id} value={year.year_code || year.year || `${year.start_year}-${year.end_year}`}>
+                                        AY {year.year_code || year.year || `${year.start_year}-${year.end_year}`}
                                     </option>
                                 ))
                             ) : (

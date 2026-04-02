@@ -17,31 +17,9 @@ import {
 import { ChevronRight } from 'lucide-react';
 import classService from '../../service/classService';
 import studentService from '../../service/studentService';
+import authService from '../../service/authService';
 
-// Fallback data
-const getFallbackClassData = () => [
-  {
-    id: 'math101',
-    title: 'Mathematics 101',
-    code: 'MATH101',
-    section: 'Section A',
-    schedule: 'MWF · 9:00 - 10:30 AM · Room 201',
-    academicYear: 'AY 2024-2025',
-    semester: '1st Semester',
-    students: [
-      {
-        id: 'stu-101',
-        name: 'Adam Apple',
-        academicStatus: 'On Track',
-        currentGrade: { score: 94, letter: 'A' },
-        attendanceRate: 97,
-        attendanceSummary: { present: 34, late: 1, excused: 1, absent: 0 },
-        highlights: ['Consistent top quiz scores'],
-        badges: ['STEM Circle'],
-      },
-    ],
-  },
-];
+// No fallback data - use real data or empty arrays
 
 const statusStyles = {
   'On Track': 'bg-emerald-50 text-emerald-700 border border-emerald-100',
@@ -63,50 +41,67 @@ function TeacherStudents() {
     setLoading(true);
     setError(null);
     try {
-      const classResponse = await classService.getAll();
-      const classes = classResponse.data || classResponse || [];
+      const user = authService.getCurrentUser();
+      const classResponse = await classService.getAll({
+        per_page: 1000,
+        status: 'active',
+        ...(user?.teacher_id ? { teacher_id: user.teacher_id } : {}),
+      });
+      const classPayload = classResponse?.data ?? classResponse;
+      const classes = Array.isArray(classPayload) ? classPayload : (Array.isArray(classPayload?.data) ? classPayload.data : []);
+
+      const asText = (value, fallback = '') => {
+        if (value === null || value === undefined) return fallback;
+        if (typeof value === 'string' || typeof value === 'number') return String(value);
+        return fallback;
+      };
       
       // Fetch students for each class
       const classesWithStudents = await Promise.all(
         classes.map(async (cls) => {
           let students = [];
           try {
-            const studentsResponse = await studentService.getByClass(cls.id);
-            students = (studentsResponse.data || studentsResponse || []).map(stu => ({
+            const studentsResponse = await classService.getStudents(cls.id, { status: 'enrolled', per_page: 1000 });
+            const studentsPayload = studentsResponse?.data ?? studentsResponse;
+            const enrollmentRows = Array.isArray(studentsPayload) ? studentsPayload : (Array.isArray(studentsPayload?.data) ? studentsPayload.data : []);
+
+            students = enrollmentRows.map(row => {
+              const stu = row.student || row;
+              return {
               id: stu.id,
               name: `${stu.first_name || ''} ${stu.last_name || ''}`.trim() || stu.name || 'Student',
               academicStatus: stu.academic_status || stu.status || 'On Track',
               currentGrade: { 
-                score: stu.grade_score || stu.current_grade || 85, 
-                letter: stu.grade_letter || 'B' 
+                score: stu.grade_score || stu.current_grade || 85,
+                letter: stu.grade_letter || 'B'
               },
               attendanceRate: stu.attendance_rate || 90,
               attendanceSummary: stu.attendance_summary || { present: 30, late: 2, excused: 1, absent: 2 },
               highlights: stu.highlights || [],
               badges: stu.badges || [],
-            }));
+            }});
           } catch (err) {
             console.error(`Failed to fetch students for class ${cls.id}:`, err);
           }
           
           return {
             id: cls.id,
-            title: cls.subject?.name || cls.name || cls.title || 'Class',
-            code: cls.subject?.code || cls.code || 'N/A',
-            section: cls.section?.name || cls.section || 'Section',
-            schedule: cls.schedule || `${cls.days || 'TBD'} · ${cls.time || 'TBD'} · ${cls.room || 'TBD'}`,
-            academicYear: cls.academic_year?.name || cls.academicYear || 'Current',
-            semester: cls.semester || '1st Semester',
+            title: asText(cls.subject?.subject_name) || asText(cls.subject?.name) || asText(cls.name) || asText(cls.title) || 'Class',
+            code: asText(cls.subject?.subject_code) || asText(cls.subject?.code) || asText(cls.code) || 'N/A',
+            section: asText(cls.section?.section_code) || asText(cls.section?.name) || asText(cls.section_name) || asText(cls.section) || 'Section',
+            schedule: asText(cls.schedule) || `${asText(cls.days, 'TBD')} · ${asText(cls.time, 'TBD')} · ${asText(cls.room, 'TBD')}`,
+            academicYear: asText(cls.academic_year?.year_code) || asText(cls.academic_year?.name) || asText(cls.academicYear) || 'Current',
+            semester: asText(cls.subject?.semester) || asText(cls.semester) || '1st Semester',
             students,
           };
         })
       );
       
-      setClassData(classesWithStudents.length > 0 ? classesWithStudents : getFallbackClassData());
+      setClassData(classesWithStudents.length > 0 ? classesWithStudents : []);
     } catch (err) {
       console.error('Failed to fetch classes:', err);
       setError('Failed to load classes');
-      setClassData(getFallbackClassData());
+      setClassData([]);
     } finally {
       setLoading(false);
     }

@@ -58,9 +58,22 @@ const authService = {
    * @returns {Promise}
    */
   updateProfile: async (profileData) => {
-    const response = await api.put('/auth/profile', profileData);
+    const isFormData = profileData instanceof FormData;
+
+    if (isFormData && !profileData.has('_method')) {
+      // Ensure Laravel properly handles multipart updates for file uploads.
+      profileData.append('_method', 'PUT');
+    }
+
+    const response = isFormData
+      ? await api.post('/auth/profile', profileData)
+      : await api.put('/auth/profile', profileData);
+
     if (response.data.user) {
       localStorage.setItem('user', JSON.stringify(response.data.user));
+      window.dispatchEvent(new CustomEvent('auth-user-updated', {
+        detail: response.data.user,
+      }));
     }
     return response.data;
   },

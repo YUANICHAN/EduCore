@@ -3,7 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Models\Program;
+use App\Models\Department;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 
 class ProgramController extends Controller
 {
@@ -13,28 +15,26 @@ class ProgramController extends Controller
             return null;
         }
 
-        if ($program && $program->program_image && file_exists(public_path($program->program_image))) {
-            @unlink(public_path($program->program_image));
+        if ($program && $program->program_image) {
+            if (str_starts_with($program->program_image, 'storage/')) {
+                Storage::disk('public')->delete(str_replace('storage/', '', $program->program_image));
+            } elseif (file_exists(public_path($program->program_image))) {
+                @unlink(public_path($program->program_image));
+            }
         }
 
         $file = $request->file('program_image');
         $filename = time() . '_' . uniqid() . '.' . $file->getClientOriginalExtension();
-        $path = public_path() . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR . 'programs';
+        $storedPath = $file->storeAs('uploads/programs', $filename, 'public');
 
-        if (!file_exists($path)) {
-            mkdir($path, 0777, true);
-        }
-
-        $file->move($path, $filename);
-
-        return 'uploads/programs/' . $filename;
+        return 'storage/' . $storedPath;
     }
     /**
      * Display a paginated listing of programs
      */
     public function index(Request $request)
     {
-        $query = Program::withCount(['sections', 'subjects', 'students']);
+        $query = Program::with(['department:id,code,name'])->withCount(['sections', 'subjects', 'students']);
         
         // Search functionality
         if ($request->has('search')) {
@@ -51,7 +51,12 @@ class ProgramController extends Controller
             $query->where('status', $request->status);
         }
         
-        // Filter by department
+        // Filter by department id (source of truth)
+        if ($request->has('department_id')) {
+            $query->where('department_id', $request->department_id);
+        }
+
+        // Backward-compatible filter by department text
         if ($request->has('department')) {
             $query->where('department', $request->department);
         }
@@ -92,6 +97,23 @@ class ProgramController extends Controller
             'credits_required' => 'nullable|integer|min:0',
             'status' => 'required|in:active,inactive',
         ]);
+
+        // Keep legacy text column in sync with FK when department_id is provided.
+        if (!empty($validated['department_id'])) {
+            $department = Department::find($validated['department_id']);
+            if ($department) {
+                $validated['department'] = $department->name;
+            }
+        } elseif (!empty($validated['department'])) {
+            // Resolve department_id from text when possible.
+            $department = Department::where('name', $validated['department'])
+                ->orWhere('code', $validated['department'])
+                ->first();
+            if ($department) {
+                $validated['department_id'] = $department->id;
+                $validated['department'] = $department->name;
+            }
+        }
 
         if ($request->hasFile('program_image')) {
             $validated['program_image'] = $this->uploadProgramImage($request);
@@ -134,6 +156,23 @@ class ProgramController extends Controller
             'credits_required' => 'nullable|integer|min:0',
             'status' => 'in:active,inactive',
         ]);
+
+        // Keep legacy text column in sync with FK when department_id is provided.
+        if (!empty($validated['department_id'])) {
+            $department = Department::find($validated['department_id']);
+            if ($department) {
+                $validated['department'] = $department->name;
+            }
+        } elseif (!empty($validated['department'])) {
+            // Resolve department_id from text when possible.
+            $department = Department::where('name', $validated['department'])
+                ->orWhere('code', $validated['department'])
+                ->first();
+            if ($department) {
+                $validated['department_id'] = $department->id;
+                $validated['department'] = $department->name;
+            }
+        }
 
         if ($request->hasFile('program_image')) {
             $validated['program_image'] = $this->uploadProgramImage($request, $program);
@@ -178,8 +217,12 @@ class ProgramController extends Controller
             ], 422);
         }
 
-        if ($program->program_image && file_exists(public_path($program->program_image))) {
-            @unlink(public_path($program->program_image));
+        if ($program->program_image) {
+            if (str_starts_with($program->program_image, 'storage/')) {
+                Storage::disk('public')->delete(str_replace('storage/', '', $program->program_image));
+            } elseif (file_exists(public_path($program->program_image))) {
+                @unlink(public_path($program->program_image));
+            }
         }
 
         $program->delete();
