@@ -22,6 +22,8 @@ use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\GradingPeriodController;
 use App\Http\Controllers\SectionEnrollmentController;
+use App\Http\Controllers\BuildingController;
+use App\Http\Controllers\RoomController;
 
 /*
 |--------------------------------------------------------------------------
@@ -177,6 +179,10 @@ Route::apiResource('grades', GradeController::class);
 Route::get('schedules/section/{section}', [ScheduleController::class, 'bySection']);
 Route::get('schedules/teacher/{teacher}', [ScheduleController::class, 'byTeacher']);
 Route::apiResource('schedules', ScheduleController::class);
+
+// Rooms
+Route::apiResource('buildings', BuildingController::class);
+Route::apiResource('rooms', RoomController::class);
 
 // Announcements
 Route::get('announcements/section/{section}', [AnnouncementController::class, 'bySection']);

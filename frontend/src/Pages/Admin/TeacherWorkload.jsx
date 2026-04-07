@@ -5,6 +5,7 @@ import Swal from 'sweetalert2';
 import Sidebar from '../../Components/Admin/Sidebar.jsx';
 import teacherService from '../../service/teacherService';
 import classService from '../../service/classService';
+import scheduleService from '../../service/scheduleService';
 import sectionService from '../../service/sectionService';
 import subjectService from '../../service/subjectService';
 import programService from '../../service/programService';
@@ -61,7 +62,9 @@ function TeacherWorkload() {
   const [loadFilter, setLoadFilter] = useState('all');
   const [departmentFilter, setDepartmentFilter] = useState('');
   const [selectedClassIds, setSelectedClassIds] = useState([]);
+  const [selectedAssignedClassIds, setSelectedAssignedClassIds] = useState([]);
   const [availableMode, setAvailableMode] = useState('all'); // 'unassigned' or 'all'
+  const [assignedScheduleFilter, setAssignedScheduleFilter] = useState('all');
   const [showCancelledClasses, setShowCancelledClasses] = useState(() => {
     try {
       return localStorage.getItem(SHOW_CANCELLED_CLASSES_KEY) === 'true';
@@ -104,6 +107,22 @@ function TeacherWorkload() {
     status: 'active',
   });
 
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [scheduleModalLoading, setScheduleModalLoading] = useState(false);
+  const [savingSchedule, setSavingSchedule] = useState(false);
+  const [selectedScheduleClass, setSelectedScheduleClass] = useState(null);
+  const [selectedScheduleId, setSelectedScheduleId] = useState(null);
+  const [scheduleRecords, setScheduleRecords] = useState([]);
+  const [showBulkScheduleModal, setShowBulkScheduleModal] = useState(false);
+  const [bulkScheduling, setBulkScheduling] = useState(false);
+  const [bulkScheduleForm, setBulkScheduleForm] = useState({
+    day_of_week: '',
+    time_start: '',
+    time_end: '',
+    room_number: '',
+    building: '',
+  });
+
   const normalizeText = (value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
   const normalizeId = (value) => {
     const parsed = Number(value);
@@ -136,6 +155,35 @@ function TeacherWorkload() {
     if (text.includes('fourth')) return 4;
 
     return null;
+  };
+
+  const formatTimeForApi = (value) => {
+    if (!value) return '';
+    const text = String(value).trim();
+    if (!text) return '';
+    return text.length === 5 ? `${text}:00` : text;
+  };
+
+  const getClassSchedules = (cls) => (Array.isArray(cls?.schedules) ? cls.schedules : []);
+
+  const hasClassSchedule = (cls) => getClassSchedules(cls).length > 0;
+
+  const getScheduleLabel = (schedule) => {
+    const day = schedule?.day_of_week || 'Day';
+    const start = String(schedule?.time_start || '').slice(0, 5);
+    const end = String(schedule?.time_end || '').slice(0, 5);
+    return `${day} ${start || '--:--'} - ${end || '--:--'}`;
+  };
+
+  const resetScheduleForm = () => {
+    setSelectedScheduleId(null);
+    setBulkScheduleForm({
+      day_of_week: '',
+      time_start: '',
+      time_end: '',
+      room_number: '',
+      building: '',
+    });
   };
 
   // ── Data Fetching ──
@@ -214,6 +262,12 @@ function TeacherWorkload() {
     if (selectedTeacher) fetchTeacherWorkload(selectedTeacher.id);
   }, [selectedTeacher, fetchTeacherWorkload]);
   useEffect(() => {
+    setSelectedAssignedClassIds([]);
+    setShowScheduleModal(false);
+    setShowBulkScheduleModal(false);
+    resetScheduleForm();
+  }, [selectedTeacher]);
+  useEffect(() => {
     try {
       localStorage.setItem(SHOW_CANCELLED_CLASSES_KEY, String(showCancelledClasses));
     } catch {
@@ -266,9 +320,16 @@ function TeacherWorkload() {
   }, [teacherWorkload]);
 
   const visibleAssignedClasses = useMemo(() => {
-    if (showCancelledClasses) return assignedClasses;
-    return assignedClasses.filter(cls => (cls.status || 'active') !== 'cancelled');
-  }, [assignedClasses, showCancelledClasses]);
+    const activeClasses = showCancelledClasses
+      ? assignedClasses
+      : assignedClasses.filter(cls => (cls.status || 'active') !== 'cancelled');
+
+    return activeClasses.filter((cls) => {
+      if (assignedScheduleFilter === 'with-schedule') return hasClassSchedule(cls);
+      if (assignedScheduleFilter === 'without-schedule') return !hasClassSchedule(cls);
+      return true;
+    });
+  }, [assignedClasses, assignedScheduleFilter, showCancelledClasses]);
 
   const assignedSubjects = useMemo(() => {
     const subjectMap = new Map();
@@ -852,6 +913,171 @@ function TeacherWorkload() {
     setShowEditClassModal(false);
   };
 
+  const toggleAssignedClassSelection = (classId) => {
+    setSelectedAssignedClassIds((prev) => (
+      prev.includes(classId) ? prev.filter((id) => id !== classId) : [...prev, classId]
+    ));
+  };
+
+  const selectAllVisibleAssignedClasses = () => {
+    setSelectedAssignedClassIds(visibleAssignedClasses.map((cls) => cls.id));
+  };
+
+  const clearSelectedAssignedClasses = () => {
+    setSelectedAssignedClassIds([]);
+  };
+
+  const openBulkScheduleModal = () => {
+    if (selectedAssignedClassIds.length === 0) {
+      showBanner('error', 'Select one or more assigned classes first');
+      return;
+    }
+
+    resetScheduleForm();
+    setShowBulkScheduleModal(true);
+  };
+
+  const handleBulkScheduleAssign = async () => {
+    if (!selectedTeacher || selectedAssignedClassIds.length === 0) return;
+    if (!bulkScheduleForm.day_of_week || !bulkScheduleForm.time_start || !bulkScheduleForm.time_end) {
+      showBanner('error', 'Please select day, start time, and end time');
+      return;
+    }
+
+    setBulkScheduling(true);
+    try {
+      const results = await Promise.allSettled(
+        selectedAssignedClassIds.map((classId) => scheduleService.create({
+          class_id: classId,
+          day_of_week: bulkScheduleForm.day_of_week,
+          time_start: formatTimeForApi(bulkScheduleForm.time_start),
+          time_end: formatTimeForApi(bulkScheduleForm.time_end),
+          room_number: bulkScheduleForm.room_number || null,
+          building: bulkScheduleForm.building || null,
+        }))
+      );
+
+      const successCount = results.filter((result) => result.status === 'fulfilled').length;
+      const failedCount = results.length - successCount;
+
+      if (failedCount > 0) {
+        showBanner('error', `${successCount} schedule(s) created, ${failedCount} failed`);
+      } else {
+        showBanner('success', `${successCount} schedule(s) created successfully`);
+      }
+
+      setShowBulkScheduleModal(false);
+      clearSelectedAssignedClasses();
+      await fetchTeacherWorkload(selectedTeacher.id);
+    } catch (err) {
+      showBanner('error', err?.response?.data?.message || 'Bulk schedule assignment failed');
+    } finally {
+      setBulkScheduling(false);
+    }
+  };
+
+  const openScheduleModalForClass = async (cls) => {
+    if (!cls) return;
+
+    setSelectedScheduleClass(cls);
+    setShowScheduleModal(true);
+    setScheduleModalLoading(true);
+    setSelectedScheduleId(null);
+    resetScheduleForm();
+
+    try {
+      const res = await classService.getSchedule(cls.id);
+      const data = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : (res?.data || []));
+      setScheduleRecords(data);
+      if (data.length > 0) {
+        const first = data[0];
+        setSelectedScheduleId(first.id);
+        setBulkScheduleForm({
+          day_of_week: first.day_of_week || first.day || '',
+          time_start: String(first.time_start || '').slice(0, 5),
+          time_end: String(first.time_end || '').slice(0, 5),
+          room_number: first.room_number || first.room || '',
+          building: first.building || '',
+        });
+      }
+    } catch {
+      setScheduleRecords([]);
+    } finally {
+      setScheduleModalLoading(false);
+    }
+  };
+
+  const startEditingSchedule = (schedule) => {
+    setSelectedScheduleId(schedule.id);
+    setBulkScheduleForm({
+      day_of_week: schedule.day_of_week || schedule.day || '',
+      time_start: String(schedule.time_start || '').slice(0, 5),
+      time_end: String(schedule.time_end || '').slice(0, 5),
+      room_number: schedule.room_number || schedule.room || '',
+      building: schedule.building || '',
+    });
+  };
+
+  const handleSaveSchedule = async () => {
+    if (!selectedScheduleId) {
+      showBanner('error', 'Select a schedule to edit');
+      return;
+    }
+
+    if (!bulkScheduleForm.day_of_week || !bulkScheduleForm.time_start || !bulkScheduleForm.time_end) {
+      showBanner('error', 'Please select day, start time, and end time');
+      return;
+    }
+
+    setSavingSchedule(true);
+    try {
+      await scheduleService.update(selectedScheduleId, {
+        class_id: selectedScheduleClass.id,
+        day_of_week: bulkScheduleForm.day_of_week,
+        time_start: formatTimeForApi(bulkScheduleForm.time_start),
+        time_end: formatTimeForApi(bulkScheduleForm.time_end),
+        room_number: bulkScheduleForm.room_number || null,
+        building: bulkScheduleForm.building || null,
+      });
+
+      showBanner('success', 'Schedule updated successfully');
+      await fetchTeacherWorkload(selectedTeacher.id);
+      await openScheduleModalForClass(selectedScheduleClass);
+    } catch (err) {
+      showBanner('error', err?.response?.data?.message || 'Failed to update schedule');
+    } finally {
+      setSavingSchedule(false);
+    }
+  };
+
+  const handleDeleteSchedule = async () => {
+    if (!selectedScheduleId) {
+      showBanner('error', 'Select a schedule to delete');
+      return;
+    }
+
+    const confirm = await Swal.fire({
+      icon: 'warning',
+      title: 'Delete schedule?',
+      text: 'This action cannot be undone.',
+      showCancelButton: true,
+      confirmButtonText: 'Delete',
+      confirmButtonColor: '#dc2626',
+    });
+
+    if (!confirm.isConfirmed) return;
+
+    try {
+      await scheduleService.delete(selectedScheduleId);
+      showBanner('success', 'Schedule deleted successfully');
+      resetScheduleForm();
+      await fetchTeacherWorkload(selectedTeacher.id);
+      await openScheduleModalForClass(selectedScheduleClass);
+    } catch (err) {
+      showBanner('error', err?.response?.data?.message || 'Failed to delete schedule');
+    }
+  };
+
   // ── Helpers ──
   const getLoadColor = (pct) => {
     if (pct >= 100) return 'text-red-600';
@@ -1030,7 +1256,7 @@ function TeacherWorkload() {
               {/* Filters */}
               <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-6">
                 <div className="flex flex-wrap items-center gap-4">
-                  <div className="relative flex-1 min-w-[200px]">
+                  <div className="relative flex-1 min-w-50">
                     <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
                     <input
                       type="text"
@@ -1093,7 +1319,7 @@ function TeacherWorkload() {
                       >
                         <div className="flex items-start justify-between mb-3">
                           <div className="flex items-center gap-3">
-                            <div className="w-11 h-11 rounded-full bg-gradient-to-br from-blue-100 to-indigo-100 flex items-center justify-center text-sm font-bold text-indigo-600">
+                            <div className="w-11 h-11 rounded-full bg-linear-to-br from-blue-100 to-indigo-100 flex items-center justify-center text-sm font-bold text-indigo-600">
                               {getInitials(teacher.first_name, teacher.last_name)}
                             </div>
                             <div>
@@ -1345,7 +1571,16 @@ function TeacherWorkload() {
                           <Layers className="w-5 h-5 text-indigo-600" />
                           Assigned Classes
                         </h2>
-                        <div className="flex items-center gap-3">
+                        <div className="flex flex-wrap items-center gap-3 justify-end">
+                          <select
+                            value={assignedScheduleFilter}
+                            onChange={(e) => setAssignedScheduleFilter(e.target.value)}
+                            className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs text-gray-700 focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                          >
+                            <option value="all">All schedules</option>
+                            <option value="with-schedule">Has schedule</option>
+                            <option value="without-schedule">No schedule</option>
+                          </select>
                           <label className="inline-flex items-center gap-2 text-xs text-gray-600 select-none">
                             <input
                               type="checkbox"
@@ -1355,6 +1590,28 @@ function TeacherWorkload() {
                             />
                             Show cancelled
                           </label>
+                          <button
+                            type="button"
+                            onClick={selectAllVisibleAssignedClasses}
+                            className="rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                          >
+                            Select filtered
+                          </button>
+                          <button
+                            type="button"
+                            onClick={clearSelectedAssignedClasses}
+                            className="rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                          >
+                            Clear selection
+                          </button>
+                          <button
+                            type="button"
+                            onClick={openBulkScheduleModal}
+                            className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            Bulk Assign Schedule
+                          </button>
                           <span className="text-sm text-gray-500">{visibleAssignedClasses.length} class(es)</span>
                         </div>
                       </div>
@@ -1373,9 +1630,13 @@ function TeacherWorkload() {
                         <table className="min-w-full text-sm">
                           <thead className="bg-gray-50 text-gray-600">
                             <tr>
+                              <th className="px-4 py-3 text-left font-semibold">
+                                <span className="sr-only">Select</span>
+                              </th>
                               <th className="px-4 py-3 text-left font-semibold">Class</th>
                               <th className="px-4 py-3 text-left font-semibold">Subject</th>
                               <th className="px-4 py-3 text-left font-semibold">Section</th>
+                              <th className="px-4 py-3 text-left font-semibold">Schedule</th>
                               <th className="px-4 py-3 text-left font-semibold">Students</th>
                               <th className="px-4 py-3 text-left font-semibold">Status</th>
                               <th className="px-4 py-3 text-right font-semibold">Actions</th>
@@ -1384,6 +1645,15 @@ function TeacherWorkload() {
                           <tbody className="divide-y divide-gray-100">
                             {visibleAssignedClasses.map(cls => (
                               <tr key={cls.id} className="hover:bg-gray-50">
+                                <td className="px-4 py-3 align-top">
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedAssignedClassIds.includes(cls.id)}
+                                    onChange={() => toggleAssignedClassSelection(cls.id)}
+                                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                    aria-label={`Select ${cls.class_code || `Class #${cls.id}`}`}
+                                  />
+                                </td>
                                 <td className="px-4 py-3 text-gray-900 font-medium">{cls.class_code || `Class #${cls.id}`}</td>
                                 <td className="px-4 py-3 text-gray-700">
                                   <div className="font-medium">{cls.subject?.subject_name || 'N/A'}</div>
@@ -1392,6 +1662,30 @@ function TeacherWorkload() {
                                 <td className="px-4 py-3 text-gray-700">
                                   <div className="font-medium">{cls.section?.name || cls.section?.section_code || 'N/A'}</div>
                                   <div className="text-xs text-gray-500">{cls.section?.program?.program_name || cls.section?.program?.name || ''}</div>
+                                </td>
+                                <td className="px-4 py-3 text-gray-700">
+                                  {getClassSchedules(cls).length > 0 ? (
+                                    <div className="space-y-1">
+                                      {getClassSchedules(cls).slice(0, 2).map((schedule) => (
+                                        <div key={schedule.id} className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
+                                          <div className="font-medium text-gray-900">{getScheduleLabel(schedule)}</div>
+                                          <div className="text-xs text-gray-500">
+                                            {schedule.room_number || schedule.room || 'No room'}
+                                            {schedule.building ? ` • ${schedule.building}` : ''}
+                                          </div>
+                                        </div>
+                                      ))}
+                                      {getClassSchedules(cls).length > 2 && (
+                                        <div className="text-xs text-gray-500">
+                                          +{getClassSchedules(cls).length - 2} more
+                                        </div>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
+                                      No schedule
+                                    </span>
+                                  )}
                                 </td>
                                 <td className="px-4 py-3 text-gray-700">{cls.enrollments_count || 0}</td>
                                 <td className="px-4 py-3">
@@ -1412,6 +1706,12 @@ function TeacherWorkload() {
                                       className="px-3 py-1.5 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-xs font-medium"
                                     >
                                       Edit
+                                    </button>
+                                    <button
+                                      onClick={() => openScheduleModalForClass(cls)}
+                                      className="px-3 py-1.5 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 text-xs font-medium"
+                                    >
+                                      Edit Schedule
                                     </button>
                                     <button
                                       onClick={() => handleUnassignClass(cls.id)}
@@ -1496,7 +1796,7 @@ function TeacherWorkload() {
                   <X className="w-5 h-5" />
                 </button>
               </div>
-              <div className="px-6 py-4 max-h-[400px] overflow-y-auto">
+              <div className="px-6 py-4 max-h-100 overflow-y-auto">
                 {conflicts.conflicts?.length > 0 && (
                   <div className="mb-4">
                     <h4 className="text-sm font-semibold text-red-700 mb-2 flex items-center gap-1">
@@ -1910,6 +2210,262 @@ function TeacherWorkload() {
                   >
                     {editClassLoading && <Loader2 className="w-4 h-4 animate-spin" />}
                     Save Changes
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showScheduleModal && selectedScheduleClass && (
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl mx-4 max-h-[90vh] overflow-y-auto">
+              <div className="sticky top-0 bg-white flex items-center justify-between px-6 py-4 border-b border-gray-200">
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">
+                    Edit Schedule - {selectedScheduleClass.class_code || `Class #${selectedScheduleClass.id}`}
+                  </h3>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Select an existing schedule to edit. Use bulk assignment to create new schedules.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowScheduleModal(false)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="grid gap-6 px-6 py-5 lg:grid-cols-2">
+                <div>
+                  <div className="mb-3 flex items-center justify-between">
+                    <h4 className="font-semibold text-gray-900">Existing Schedules</h4>
+                    <span className="text-xs text-gray-500">{scheduleRecords.length} record(s)</span>
+                  </div>
+
+                  <div className="space-y-3">
+                    {scheduleModalLoading ? (
+                      <div className="rounded-lg border border-gray-200 bg-gray-50 p-6 text-center">
+                        <Loader2 className="mx-auto mb-2 h-6 w-6 animate-spin text-blue-600" />
+                        <p className="text-sm text-gray-600">Loading schedules...</p>
+                      </div>
+                    ) : scheduleRecords.length === 0 ? (
+                      <div className="rounded-lg border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500">
+                        No schedules yet for this class.
+                      </div>
+                    ) : (
+                      scheduleRecords.map((schedule) => (
+                        <button
+                          key={schedule.id}
+                          type="button"
+                          onClick={() => startEditingSchedule(schedule)}
+                          className={`w-full rounded-lg border p-4 text-left transition-colors ${
+                            String(selectedScheduleId) === String(schedule.id)
+                              ? 'border-blue-200 bg-blue-50 ring-1 ring-blue-100'
+                              : 'border-gray-200 bg-white hover:bg-gray-50'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <div className="font-medium text-gray-900">{schedule.day_of_week}</div>
+                              <div className="mt-1 text-sm text-gray-600">
+                                {String(schedule.time_start || '').slice(0, 5)} - {String(schedule.time_end || '').slice(0, 5)}
+                              </div>
+                              <div className="text-xs text-gray-500">{schedule.room_number || schedule.room || 'No room'}</div>
+                              <div className="text-xs text-gray-500">{schedule.building || ''}</div>
+                            </div>
+                            <span className="rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-medium text-gray-600">
+                              {String(selectedScheduleId) === String(schedule.id) ? 'Selected' : 'Edit'}
+                            </span>
+                          </div>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                  <h4 className="mb-4 font-semibold text-gray-900">Edit Schedule</h4>
+
+                  {!selectedScheduleId ? (
+                    <div className="rounded-lg border border-dashed border-gray-300 bg-white p-6 text-center text-sm text-gray-500">
+                      Select a schedule from the left pane to edit it.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-gray-600">Day</label>
+                        <select
+                          value={bulkScheduleForm.day_of_week}
+                          onChange={(e) => setBulkScheduleForm((prev) => ({ ...prev, day_of_week: e.target.value }))}
+                          className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                        >
+                          <option value="">Select a day</option>
+                          {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((day) => (
+                            <option key={day} value={day}>{day}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-gray-600">Start Time</label>
+                          <input
+                            type="time"
+                            value={bulkScheduleForm.time_start}
+                            onChange={(e) => setBulkScheduleForm((prev) => ({ ...prev, time_start: e.target.value }))}
+                            className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-gray-600">End Time</label>
+                          <input
+                            type="time"
+                            value={bulkScheduleForm.time_end}
+                            onChange={(e) => setBulkScheduleForm((prev) => ({ ...prev, time_end: e.target.value }))}
+                            className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-gray-600">Room</label>
+                        <input
+                          value={bulkScheduleForm.room_number}
+                          onChange={(e) => setBulkScheduleForm((prev) => ({ ...prev, room_number: e.target.value }))}
+                          className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                          placeholder="Room 101"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-gray-600">Building</label>
+                        <input
+                          value={bulkScheduleForm.building}
+                          onChange={(e) => setBulkScheduleForm((prev) => ({ ...prev, building: e.target.value }))}
+                          className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                          placeholder="Main Campus"
+                        />
+                      </div>
+
+                      <div className="flex items-center justify-end gap-2 pt-2">
+                        <button
+                          onClick={() => setShowScheduleModal(false)}
+                          className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 text-sm font-medium"
+                        >
+                          Close
+                        </button>
+                        <button
+                          onClick={handleDeleteSchedule}
+                          disabled={savingSchedule}
+                          className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm font-medium disabled:opacity-50"
+                        >
+                          Delete Selected
+                        </button>
+                        <button
+                          onClick={handleSaveSchedule}
+                          disabled={savingSchedule}
+                          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-semibold disabled:opacity-50 flex items-center gap-2"
+                        >
+                          {savingSchedule && <Loader2 className="w-4 h-4 animate-spin" />}
+                          Save Changes
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showBulkScheduleModal && (
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl mx-4 max-h-[85vh] overflow-y-auto">
+              <div className="sticky top-0 bg-white flex items-center justify-between px-6 py-4 border-b border-gray-200">
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">Bulk Assign Schedule</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Apply one schedule to {selectedAssignedClassIds.length} selected class{selectedAssignedClassIds.length === 1 ? '' : 'es'}.
+                  </p>
+                </div>
+                <button onClick={() => setShowBulkScheduleModal(false)} className="text-gray-400 hover:text-gray-600">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="px-6 py-4 space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Day</label>
+                    <select
+                      value={bulkScheduleForm.day_of_week}
+                      onChange={(e) => setBulkScheduleForm((prev) => ({ ...prev, day_of_week: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    >
+                      <option value="">Select Day</option>
+                      {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((day) => (
+                        <option key={day} value={day}>{day}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Building</label>
+                    <input
+                      value={bulkScheduleForm.building}
+                      onChange={(e) => setBulkScheduleForm((prev) => ({ ...prev, building: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      placeholder="Main Campus"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Start Time</label>
+                    <input
+                      type="time"
+                      value={bulkScheduleForm.time_start}
+                      onChange={(e) => setBulkScheduleForm((prev) => ({ ...prev, time_start: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">End Time</label>
+                    <input
+                      type="time"
+                      value={bulkScheduleForm.time_end}
+                      onChange={(e) => setBulkScheduleForm((prev) => ({ ...prev, time_end: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Room</label>
+                  <input
+                    value={bulkScheduleForm.room_number}
+                    onChange={(e) => setBulkScheduleForm((prev) => ({ ...prev, room_number: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="Room 101"
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-3 pt-2">
+                  <button
+                    onClick={() => setShowBulkScheduleModal(false)}
+                    className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 text-sm font-medium"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleBulkScheduleAssign}
+                    disabled={bulkScheduling}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-semibold disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {bulkScheduling && <Loader2 className="w-4 h-4 animate-spin" />}
+                    Assign Schedule
                   </button>
                 </div>
               </div>

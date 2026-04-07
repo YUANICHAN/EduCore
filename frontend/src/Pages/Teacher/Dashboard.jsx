@@ -33,6 +33,18 @@ import {
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Filler, Title, Tooltip, Legend);
 
+function getSubjectDisplay(value, fallback = 'N/A') {
+    if (typeof value === 'string') {
+        return value;
+    }
+
+    if (value && typeof value === 'object') {
+        return value.subject_name || value.subject_code || value.name || fallback;
+    }
+
+    return fallback;
+}
+
 function Dashboard() {
     const navigate = useNavigate();
     const [activeItem, setActiveItem] = useState("Dashboard");
@@ -243,7 +255,7 @@ function Dashboard() {
                                             </div>
                                         </div>
                                         <div className="flex-1 min-w-0">
-                                            <p className="text-sm font-semibold text-gray-900">{classItem.subject || classItem.subject_name}</p>
+                                            <p className="text-sm font-semibold text-gray-900">{getSubjectDisplay(classItem.subject, classItem.subject_name || 'N/A')}</p>
                                             <p className="text-xs text-gray-600">{classItem.room || classItem.room_number} • {classItem.students || classItem.students_count || 0} students</p>
                                         </div>
                                         <div className="text-right">
@@ -267,7 +279,7 @@ function Dashboard() {
                             {pendingSubmissions.length > 0 ? (
                                 pendingSubmissions.map((submission, index) => (
                                     <div key={index} className="p-3 bg-orange-50 border border-orange-200 rounded-lg">
-                                        <p className="text-sm font-semibold text-gray-900">{submission.subject || submission.subject_name}</p>
+                                        <p className="text-sm font-semibold text-gray-900">{getSubjectDisplay(submission.subject, submission.subject_name || 'N/A')}</p>
                                         <p className="text-xs text-orange-700 mt-1">📝 {submission.count || submission.pending_count} grades pending</p>
                                         <p className="text-xs text-gray-600 mt-1">⏰ {submission.deadline}</p>
                                     </div>
@@ -291,7 +303,7 @@ function Dashboard() {
                                 datasets: [
                                   {
                                     label: 'Students Enrolled',
-                                    data: subjects.map(s => s.students),
+                                    data: subjects.map(s => s.students || s.students_count || 0),
                                     backgroundColor: '#10b981',
                                     borderRadius: 6,
                                   },

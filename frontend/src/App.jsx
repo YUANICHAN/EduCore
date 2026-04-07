@@ -14,11 +14,13 @@ import Students from './Pages/Admin/Students.jsx'
 import UnassignedStudents from './Pages/Admin/UnassignedStudents.jsx'
 import StudentsList from './Pages/Admin/StudentsList.jsx'
 import Teachers from './Pages/Admin/Teachers.jsx'
+import ClassPage from './Pages/Admin/class.jsx';
 import TeachersList from './Pages/Admin/TeachersList.jsx'
 import Programs from './Pages/Admin/Programs.jsx'
 import Departments from './Pages/Admin/Departments.jsx'
 import Subjects from './Pages/Admin/Subjects.jsx'
 import Section from './Pages/Admin/Section.jsx'
+import Room from './Pages/Admin/Room.jsx'
 import AcademicYear from './Pages/Admin/AcademicYear.jsx'
 import Reports from './Pages/Admin/Reports.jsx'
 import Settings from './Pages/Admin/Settings.jsx'
@@ -84,6 +86,7 @@ function App() {
               <TeacherAccounts />
             </ProtectedRoute>
           } />
+          <Route path="/admin/classes" element={<ClassPage />} />
           <Route path="/admin/students" element={
             <ProtectedRoute allowedRoles={['admin']}>
               <Students />
@@ -132,6 +135,11 @@ function App() {
           <Route path="/admin/sections" element={
             <ProtectedRoute allowedRoles={['admin']}>
               <Section />
+            </ProtectedRoute>
+          } />
+          <Route path="/admin/rooms" element={
+            <ProtectedRoute allowedRoles={['admin']}>
+              <Room />
             </ProtectedRoute>
           } />
           <Route path="/admin/academic-year" element={

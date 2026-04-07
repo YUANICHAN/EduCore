@@ -144,6 +144,22 @@ const classService = {
     const response = await api.get(`/teachers/${teacherId}/availability`);
     return response.data;
   },
+
+  getSchedules(classId, params = {}) {
+    return api.get(`/classes/${classId}/schedules`, { params });
+  },
+
+  createSchedule(classId, payload) {
+    return api.post(`/classes/${classId}/schedules`, payload);
+  },
+
+  updateSchedule(scheduleId, payload) {
+    return api.put(`/schedules/${scheduleId}`, payload);
+  },
+
+  deleteSchedule(scheduleId) {
+    return api.delete(`/schedules/${scheduleId}`);
+  },
 };
 
 export default classService;

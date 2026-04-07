@@ -59,6 +59,17 @@ class ClassesController extends Controller
         if ($request->boolean('assigned_only')) {
             $query->whereNotNull('teacher_id');
         }
+
+        // Filter by schedule presence: has_schedule=1|0
+        if ($request->has('has_schedule')) {
+            $hasSchedule = filter_var($request->get('has_schedule'), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+
+            if ($hasSchedule === true) {
+                $query->whereHas('schedules');
+            } elseif ($hasSchedule === false) {
+                $query->whereDoesntHave('schedules');
+            }
+        }
         
         // Sorting
         $sortBy = $request->get('sort_by', 'class_code');
@@ -67,6 +78,7 @@ class ClassesController extends Controller
         
         // Include counts
         $query->withCount('enrollments');
+        $query->withCount('schedules');
         $query->withCount([
             'enrollments as enrolled_students_count' => function ($q) {
                 $q->where('status', 'enrolled');

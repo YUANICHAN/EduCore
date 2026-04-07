@@ -414,7 +414,7 @@ function TeacherSchedule() {
             <h2 className="text-lg font-semibold text-gray-900 mb-4">All Classes This Week</h2>
             <div className="space-y-3">
               {scheduleData.map(day => (
-                <div key={day.date}>
+                <div key={`${day.day}-${day.date || 'no-date'}`}>
                   <p className="text-sm font-semibold text-gray-700 mb-2">{day.day}</p>
                   <div className="space-y-2 ml-4">
                     {day.classes.map(classItem => (

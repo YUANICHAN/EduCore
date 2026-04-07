@@ -208,9 +208,11 @@ function Sidebar({ activeItem, setActiveItem }) {
       ]
     },
     { name: "Programs", icon: BookOpen, path: "/admin/programs" },
+    { name: "Classes", icon: BookOpen, path: "/admin/classes" },
     { name: "Departments", icon: Building2, path: "/admin/departments" },
     { name: "Subjects", icon: Library, path: "/admin/subjects" },
     { name: "Sections", icon: Grid, path: "/admin/sections" },
+    { name: "Rooms", icon: Building2, path: "/admin/rooms" },
     { name: "Academic Year", icon: Calendar, path: "/admin/academic-year" },
     { name: "Reports", icon: FileText, path: "/admin/reports" },
     { name: "Settings", icon: Settings, path: "/admin/settings" },
