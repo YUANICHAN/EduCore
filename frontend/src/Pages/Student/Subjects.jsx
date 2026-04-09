@@ -16,12 +16,19 @@ function Subjects() {
     try {
       const response = await enrollmentService.getAll();
       const enrollments = response.data || response || [];
+
+      const asText = (value, fallback = '') => {
+        if (value === null || value === undefined) return fallback;
+        if (typeof value === 'string' || typeof value === 'number') return String(value);
+        return fallback;
+      };
       
       // Map enrollments to subject format
-      const subjects = enrollments.map(enrollment => ({
-        code: enrollment.subject?.code || enrollment.class?.subject?.code || enrollment.subject_code || 'N/A',
-        name: enrollment.subject?.name || enrollment.class?.subject?.name || enrollment.subject_name || 'Unknown Subject',
-        units: enrollment.subject?.units || enrollment.class?.subject?.units || enrollment.units || 3,
+      const subjects = enrollments.map((enrollment, index) => ({
+        id: enrollment.id || enrollment.enrollment_id || `${index}`,
+        code: asText(enrollment.subject?.subject_code) || asText(enrollment.subject?.code) || asText(enrollment.class?.subject?.subject_code) || asText(enrollment.class?.subject?.code) || asText(enrollment.subject_code) || 'N/A',
+        name: asText(enrollment.subject?.subject_name) || asText(enrollment.subject?.name) || asText(enrollment.class?.subject?.subject_name) || asText(enrollment.class?.subject?.name) || asText(enrollment.subject_name) || 'Unknown Subject',
+        units: Number(enrollment.subject?.units ?? enrollment.class?.subject?.units ?? enrollment.units ?? 3),
         teacher: enrollment.teacher?.name 
           || (enrollment.teacher?.first_name ? `Prof. ${enrollment.teacher.first_name} ${enrollment.teacher.last_name}` : null)
           || enrollment.class?.teacher?.name
@@ -140,7 +147,7 @@ function Subjects() {
                   </tr>
                 ) : (
                   enrolledSubjects.map((subject) => (
-                    <tr key={subject.code} className="hover:bg-gray-50 transition-colors">
+                    <tr key={`${subject.id}-${subject.code}-${subject.name}`} className="hover:bg-gray-50 transition-colors">
                       <td className="px-4 py-3 text-sm font-semibold text-gray-900">{subject.code}</td>
                       <td className="px-4 py-3 text-sm text-gray-800">{subject.name}</td>
                       <td className="px-4 py-3 text-sm text-gray-700 text-center">{subject.units}</td>

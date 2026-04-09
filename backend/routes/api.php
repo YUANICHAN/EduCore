@@ -24,6 +24,7 @@ use App\Http\Controllers\GradingPeriodController;
 use App\Http\Controllers\SectionEnrollmentController;
 use App\Http\Controllers\BuildingController;
 use App\Http\Controllers\RoomController;
+use App\Http\Controllers\ClassGradingSchemeController;
 
 /*
 |--------------------------------------------------------------------------
@@ -144,6 +145,8 @@ Route::get('classes/{class}/students/export-excel', [ClassesController::class, '
 Route::get('classes/{class}/schedule', [ClassesController::class, 'schedule']);
 Route::get('classes/{class}/attendance', [ClassesController::class, 'attendance']);
 Route::get('classes/{class}/grades', [ClassesController::class, 'grades']);
+Route::get('classes/{class}/grading-scheme', [ClassGradingSchemeController::class, 'show']);
+Route::put('classes/{class}/grading-scheme', [ClassGradingSchemeController::class, 'update']);
 Route::post('classes/check-teacher-conflicts', [ClassesController::class, 'checkTeacherConflicts']);
 Route::post('classes/check-section-conflicts', [ClassesController::class, 'checkSectionConflicts']);
 Route::post('classes/check-room-conflicts', [ClassesController::class, 'checkRoomConflicts']);

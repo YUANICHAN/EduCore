@@ -71,14 +71,21 @@ function Schedule() {
     try {
       const response = await scheduleService.getAll();
       const schedules = response.data || response || [];
+
+      const asText = (value, fallback = '') => {
+        if (value === null || value === undefined) return fallback;
+        if (typeof value === 'string' || typeof value === 'number') return String(value);
+        return fallback;
+      };
       
       // Map API response to component format
-      const mappedSections = schedules.map(schedule => ({
-        day: schedule.day || schedule.day_of_week || 'Monday',
-        subject: schedule.subject?.name || schedule.subject_name || schedule.class?.subject?.name || 'Unknown Subject',
-        code: schedule.subject?.code || schedule.subject_code || schedule.class?.subject?.code || 'N/A',
-        time: schedule.time_slot || `${schedule.start_time || '08:00 AM'} - ${schedule.end_time || '09:30 AM'}`,
-        room: schedule.room || schedule.room_number || 'TBA',
+      const mappedSections = schedules.map((schedule, index) => ({
+        id: schedule.id || `${index}`,
+        day: asText(schedule.day) || asText(schedule.day_of_week) || 'Monday',
+        subject: asText(schedule.subject?.subject_name) || asText(schedule.subject?.name) || asText(schedule.subject_name) || asText(schedule.class?.subject?.subject_name) || asText(schedule.class?.subject?.name) || 'Unknown Subject',
+        code: asText(schedule.subject?.subject_code) || asText(schedule.subject?.code) || asText(schedule.subject_code) || asText(schedule.class?.subject?.subject_code) || asText(schedule.class?.subject?.code) || 'N/A',
+        time: asText(schedule.time_slot) || `${asText(schedule.start_time, '08:00 AM')} - ${asText(schedule.end_time, '09:30 AM')}`,
+        room: asText(schedule.room) || asText(schedule.room_number) || 'TBA',
         teacher: schedule.teacher?.name 
           || (schedule.teacher?.first_name ? `Prof. ${schedule.teacher.first_name} ${schedule.teacher.last_name}` : null)
           || schedule.teacher_name 
@@ -120,12 +127,38 @@ function Schedule() {
     return slots;
   }, []);
 
-  const getStartMinutes = (range) => {
-    const [startPart] = range.split('-').map((s) => s.trim());
-    const [time, meridiem] = startPart.split(' ');
-    const [h, m] = time.split(':').map(Number);
-    const hours24 = meridiem === 'PM' && h !== 12 ? h + 12 : meridiem === 'AM' && h === 12 ? 0 : h;
-    return hours24 * 60 + m;
+  const parseTimeToMinutes = (timePart) => {
+    const trimmed = (timePart || '').trim();
+    if (!trimmed) return null;
+
+    // Accept both 12-hour times (e.g. 8:00 AM) and 24-hour times (e.g. 08:00)
+    const match = trimmed.match(/^(\d{1,2}):(\d{2})(?:\s*(AM|PM))?$/i);
+    if (!match) return null;
+
+    let hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    const meridiem = match[3] ? match[3].toUpperCase() : null;
+
+    if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
+
+    if (meridiem) {
+      if (meridiem === 'PM' && hours !== 12) hours += 12;
+      if (meridiem === 'AM' && hours === 12) hours = 0;
+    }
+
+    return hours * 60 + minutes;
+  };
+
+  const getTimeRangeMinutes = (range) => {
+    const [startPart, endPart] = (range || '').split('-').map((s) => s.trim());
+    const startMinutes = parseTimeToMinutes(startPart);
+    const endMinutes = parseTimeToMinutes(endPart);
+
+    if (startMinutes === null) return null;
+    return {
+      start: startMinutes,
+      end: endMinutes !== null && endMinutes > startMinutes ? endMinutes : startMinutes + 30,
+    };
   };
 
   const toggleReminder = (code) => {
@@ -231,9 +264,11 @@ function Schedule() {
                         {slot.label}
                       </div>
                       {week.map((day) => {
-                        const classesAtSlot = day.classes.filter(
-                          (cls) => getStartMinutes(cls.time) === slot.minutes,
-                        );
+                        const classAtSlot = day.classes.find((cls) => {
+                          const range = getTimeRangeMinutes(cls.time);
+                          if (!range) return false;
+                          return slot.minutes >= range.start && slot.minutes < range.end;
+                        });
                         const cellKey = `${day.day}-${slot.label}`;
                         return (
                           <div
@@ -242,41 +277,50 @@ function Schedule() {
                               isAlt ? 'bg-white' : 'bg-gray-50'
                             } min-h-17.5`}
                           >
-                            {classesAtSlot.length === 0 ? (
+                            {!classAtSlot ? (
                               <div className="h-full text-[11px] text-gray-300 text-center">—</div>
                             ) : (
-                              <div className="space-y-2">
-                                {classesAtSlot.map((cls) => (
+                              (() => {
+                                const range = getTimeRangeMinutes(classAtSlot.time);
+                                const isStartSlot = range ? range.start === slot.minutes : true;
+
+                                if (!isStartSlot) {
+                                  return (
+                                    <div className="h-full rounded-md border border-dashed border-blue-200 bg-blue-50/60" />
+                                  );
+                                }
+
+                                return (
                                   <div
-                                    key={cls.code}
+                                    key={`${day.day}-${slot.label}-${classAtSlot.id}-${classAtSlot.code}`}
                                     className="rounded-md border border-gray-200 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04)] p-3"
                                   >
-                                    <p className="text-sm font-semibold text-gray-900 leading-snug">{cls.subject}</p>
-                                    <p className="text-xs text-gray-600">{cls.code}</p>
+                                    <p className="text-sm font-semibold text-gray-900 leading-snug">{classAtSlot.subject}</p>
+                                    <p className="text-xs text-gray-600">{classAtSlot.code}</p>
                                     <div className="flex items-center gap-2 text-[11px] text-gray-600 mt-2">
                                       <Clock className="w-3 h-3" />
-                                      <span>{cls.time}</span>
+                                      <span>{classAtSlot.time}</span>
                                     </div>
                                     <div className="flex items-center gap-2 text-[11px] text-gray-600 mt-1">
                                       <MapPin className="w-3 h-3" />
-                                      <span>{cls.room}</span>
+                                      <span>{classAtSlot.room}</span>
                                       <span className="text-gray-400">•</span>
-                                      <span>{cls.teacher}</span>
+                                      <span>{classAtSlot.teacher}</span>
                                     </div>
                                     <button
-                                      onClick={() => toggleReminder(cls.code)}
+                                      onClick={() => toggleReminder(classAtSlot.code)}
                                       className={`mt-3 inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-colors ${
-                                        reminders[cls.code]
+                                        reminders[classAtSlot.code]
                                           ? 'bg-gray-900 text-white border-gray-900'
                                           : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100'
                                       }`}
                                     >
                                       <Bell className="w-3 h-3" />
-                                      {reminders[cls.code] ? 'Reminder On' : 'Set Reminder'}
+                                      {reminders[classAtSlot.code] ? 'Reminder On' : 'Set Reminder'}
                                     </button>
                                   </div>
-                                ))}
-                              </div>
+                                );
+                              })()
                             )}
                           </div>
                         );
@@ -302,7 +346,7 @@ function Schedule() {
               ) : (
                 <div className="space-y-3">
                   {day.classes.map((cls) => (
-                    <div key={cls.code} className="rounded-lg border border-gray-200 p-3 bg-gray-50">
+                    <div key={`${day.day}-${cls.id}-${cls.code}`} className="rounded-lg border border-gray-200 p-3 bg-gray-50">
                       <p className="text-sm font-semibold text-gray-900">{cls.subject}</p>
                       <p className="text-xs text-gray-600">{cls.code}</p>
                       <div className="flex items-center gap-2 text-[11px] text-gray-600 mt-2">

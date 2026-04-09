@@ -1,5 +1,7 @@
 import axios from 'axios';
 
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 // Base API configuration - use 127.0.0.1 to match backend
 const API_BASE_URL = 'http://127.0.0.1:8000/api';
 
@@ -35,8 +37,21 @@ api.interceptors.request.use(
 // Response interceptor - handle errors
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
     // Don't redirect on 401 for public routes
+    const status = error?.response?.status;
+    const config = error?.config || {};
+
+    if (status === 429 && !config.__retried429) {
+      config.__retried429 = true;
+      const retryAfterHeader = Number(error?.response?.headers?.['retry-after']);
+      const retryDelayMs = Number.isFinite(retryAfterHeader) && retryAfterHeader > 0
+        ? retryAfterHeader * 1000
+        : 1200;
+      await wait(retryDelayMs);
+      return api.request(config);
+    }
+
     console.error('API Error:', error.response?.data || error.message);
     return Promise.reject(error);
   }

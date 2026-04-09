@@ -86,6 +86,29 @@ function Dashboard() {
             try {
                 const response = await dashboardService.getStudentDashboard({ academic_year: selectedYear });
                 const data = response.data || response;
+
+                const asText = (value, fallback = '') => {
+                    if (value === null || value === undefined) return fallback;
+                    if (typeof value === 'string' || typeof value === 'number') return String(value);
+                    return fallback;
+                };
+
+                const normalizedTodaySchedule = (data.today_schedule || data.todaySchedule || []).map((item, index) => ({
+                    id: item.id || `${index}`,
+                    subject: asText(item.subject?.subject_name) || asText(item.subject?.name) || asText(item.subject_name) || asText(item.class?.subject?.subject_name) || asText(item.class?.subject?.name) || asText(item.subject) || 'Unknown Subject',
+                    code: asText(item.code) || asText(item.subject_code) || asText(item.subject?.subject_code) || asText(item.class?.subject?.subject_code) || '-',
+                    instructor: asText(item.instructor) || asText(item.teacher_name) || asText(item.teacher?.name) || 'TBA',
+                    time: asText(item.time) || asText(item.time_slot) || '-',
+                    room: asText(item.room) || asText(item.room_number) || 'TBA',
+                }));
+
+                const normalizedEnrolledSubjects = (data.enrolled_subjects || data.enrolledSubjects || []).map((subject, index) => ({
+                    id: subject.id || `${index}`,
+                    code: asText(subject.code) || asText(subject.subject_code) || asText(subject.subject?.subject_code) || '-',
+                    name: asText(subject.name) || asText(subject.subject_name) || asText(subject.subject?.subject_name) || 'Unknown Subject',
+                    units: Number(subject.units ?? subject.subject?.units ?? 0),
+                    grade: asText(subject.grade) || 'TBA',
+                }));
                 
                 // Update student data
                 setStudentData({
@@ -102,9 +125,9 @@ function Dashboard() {
                     totalUnits: data.total_units || data.totalUnits || 144
                 });
 
-                setTodaySchedule(data.today_schedule || data.todaySchedule || []);
+                setTodaySchedule(normalizedTodaySchedule);
                 setAnnouncements(data.announcements || []);
-                setEnrolledSubjects(data.enrolled_subjects || data.enrolledSubjects || []);
+                setEnrolledSubjects(normalizedEnrolledSubjects);
             } catch (err) {
                 console.error('Failed to fetch dashboard:', err);
                 setError('Failed to load dashboard data.');
@@ -295,8 +318,8 @@ function Dashboard() {
                         
                         {todaySchedule.length > 0 ? (
                             <div className="space-y-4">
-                                {todaySchedule.map((item, index) => (
-                                    <div key={index} className="flex items-start gap-4 p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
+                                {todaySchedule.map((item) => (
+                                    <div key={`${item.id}-${item.code}-${item.time}`} className="flex items-start gap-4 p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
                                         <div className="shrink-0">
                                             <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
                                                 <Clock className="w-6 h-6 text-blue-600" />
@@ -390,7 +413,7 @@ function Dashboard() {
                                 </thead>
                                 <tbody className="divide-y divide-gray-200">
                                     {enrolledSubjects.map((subject, index) => (
-                                        <tr key={subject.id || index} className="hover:bg-gray-50 transition-colors">
+                                        <tr key={`${subject.id}-${subject.code}-${index}`} className="hover:bg-gray-50 transition-colors">
                                             <td className="px-4 py-3 text-sm font-medium text-gray-900">{subject.code || subject.subject_code || '-'}</td>
                                             <td className="px-4 py-3 text-sm text-gray-700">{subject.name || subject.subject_name || '-'}</td>
                                             <td className="px-4 py-3 text-sm text-gray-700 text-center">{subject.units || '-'}</td>

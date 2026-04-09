@@ -74,4 +74,9 @@ class Classes extends Model
     {
         return $this->hasMany(Announcement::class, 'class_id');
     }
+
+    public function gradingScheme()
+    {
+        return $this->hasOne(ClassGradingScheme::class, 'class_id');
+    }
 }

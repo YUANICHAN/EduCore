@@ -1,5 +1,5 @@
 import '../../App.css'
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { Fragment, useState, useMemo, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Sidebar from '../../Components/Teacher/Sidebar.jsx';
 import gradeService from '../../service/gradeService';
@@ -18,6 +18,32 @@ import {
   Loader2,
   AlertCircle,
 } from 'lucide-react';
+
+const DEFAULT_WEIGHTS = {
+  quizzes: 20,
+  exams: 50,
+  projects: 20,
+  attendance: 10,
+  performance_task: 0,
+  activity_task: 0,
+};
+
+const GRADE_COMPONENTS = [
+  { key: 'quizzes', label: 'Quizzes' },
+  { key: 'exams', label: 'Exams' },
+  { key: 'projects', label: 'Projects' },
+  { key: 'performance_task', label: 'Performance Task' },
+  { key: 'activity_task', label: 'Activity Task' },
+];
+
+const BASE_WEIGHT_COMPONENTS = [
+  { key: 'quizzes', label: 'Quizzes Weight' },
+  { key: 'exams', label: 'Exams Weight' },
+  { key: 'projects', label: 'Projects Weight' },
+  { key: 'attendance', label: 'Attendance Weight' },
+  { key: 'performance_task', label: 'Performance Task Weight' },
+  { key: 'activity_task', label: 'Activity Task Weight' },
+];
 
 function Gradebook() {
   const navigate = useNavigate();
@@ -38,18 +64,37 @@ function Gradebook() {
   const [selectedSubjectId, setSelectedSubjectId] = useState(null);
   const selectedSubject = useMemo(() => subjects.find(s => s.id === selectedSubjectId), [subjects, selectedSubjectId]);
 
-  // Grading components and weights (read-only config)
-  const weights = { quizzes: 20, exams: 50, projects: 20, attendance: 10 }; // total 100
+  // Grading components and weights from backend (with defaults fallback)
+  const [weights, setWeights] = useState(DEFAULT_WEIGHTS);
+  const [weightDraft, setWeightDraft] = useState({
+    quizzes: String(DEFAULT_WEIGHTS.quizzes),
+    exams: String(DEFAULT_WEIGHTS.exams),
+    projects: String(DEFAULT_WEIGHTS.projects),
+    attendance: String(DEFAULT_WEIGHTS.attendance),
+    performance_task: String(DEFAULT_WEIGHTS.performance_task),
+    activity_task: String(DEFAULT_WEIGHTS.activity_task),
+  });
+  const [savingWeights, setSavingWeights] = useState(false);
 
   // Per-component assessments with max scores and term
   const [assessments, setAssessments] = useState({
     quizzes: [],
     exams: [],
     projects: [],
+    performance_task: [],
+    activity_task: [],
   });
 
   // Students with component scores
   const [students, setStudents] = useState([]);
+  const [customComponents, setCustomComponents] = useState([]);
+  const [hiddenBaseComponents, setHiddenBaseComponents] = useState([]);
+
+  const tableComponentDefs = useMemo(() => {
+    const visibleBase = GRADE_COMPONENTS.filter((component) => !hiddenBaseComponents.includes(component.key));
+    const customDefs = customComponents.map((component) => ({ key: component.key, label: component.name }));
+    return [...visibleBase, ...customDefs];
+  }, [customComponents, hiddenBaseComponents]);
 
   // Fetch teacher's classes/subjects
   const fetchClasses = useCallback(async () => {
@@ -95,52 +140,118 @@ function Gradebook() {
     if (!selectedSubjectId) return;
     
     setLoading(true);
+    // Start each selected class with empty assessment columns.
+    setAssessments({ quizzes: [], exams: [], projects: [], performance_task: [], activity_task: [] });
+    setCustomComponents([]);
+    setHiddenBaseComponents([]);
     try {
-      const [studentsRes, gradesRes] = await Promise.all([
-        classService.getStudents(selectedSubjectId),
-        gradeService.getByClass(selectedSubjectId)
+      const [studentsRes, gradesRes, schemeRes] = await Promise.all([
+        classService.getStudents(selectedSubjectId, { status: 'enrolled', per_page: 1000 }),
+        gradeService.getByClass(selectedSubjectId),
+        classService.getGradingScheme(selectedSubjectId).catch(() => null),
       ]);
 
-      const studentsData = (studentsRes.data || studentsRes || []).map(s => ({
-        id: s.id,
-        name: `${s.first_name || ''} ${s.last_name || ''}`.trim() || s.name || 'Unknown',
-        scores: {
-          quizzes: {},
-          exams: {},
-          projects: {},
-        },
-      }));
+      const studentsPayload = studentsRes?.data ?? studentsRes;
+      const enrollmentRows = Array.isArray(studentsPayload)
+        ? studentsPayload
+        : (Array.isArray(studentsPayload?.data) ? studentsPayload.data : []);
+
+      const studentsData = enrollmentRows
+        .map(row => {
+          const student = row?.student ?? row;
+          const studentId = student?.id ?? row?.student_id ?? null;
+          if (!studentId) return null;
+
+          return {
+            id: studentId,
+            name: `${student?.first_name || ''} ${student?.last_name || ''}`.trim() || student?.name || 'Unknown Student',
+            scores: {
+              quizzes: {},
+              exams: {},
+              projects: {},
+              performance_task: {},
+              activity_task: {},
+            },
+          };
+        })
+        .filter(Boolean);
 
       // Map grades to students
       const grades = gradesRes.data || gradesRes || [];
+      const normalizeComponentKey = (value) => {
+        const text = String(value || '').toLowerCase();
+        if (text === 'quiz' || text === 'quizzes') return 'quizzes';
+        if (text === 'exam' || text === 'exams') return 'exams';
+        if (text === 'project' || text === 'projects') return 'projects';
+        if (text === 'performance_task' || text === 'performance' || text === 'performance task') return 'performance_task';
+        if (text === 'activity_task' || text === 'activity' || text === 'activity task') return 'activity_task';
+        return text.replace(/\s+/g, '_');
+      };
       grades.forEach(g => {
         const student = studentsData.find(s => s.id === g.student_id);
         if (student) {
-          const component = g.component || 'quizzes';
+          const component = normalizeComponentKey(g.component || g.component_type || '');
+          if (!component) return;
           const assessmentId = g.assessment_id || g.id;
           student.scores[component] = student.scores[component] || {};
           student.scores[component][assessmentId] = g.score || 0;
         }
       });
 
-      setStudents(studentsData);
+      const schemeResponse = (schemeRes && (schemeRes.data || schemeRes)) || null;
+      const apiWeights = schemeResponse?.data?.weights || schemeResponse?.weights || null;
+      const apiCustomComponents = schemeResponse?.data?.custom_components || schemeResponse?.custom_components || [];
+      const apiHiddenBase = schemeResponse?.data?.hidden_base_components || schemeResponse?.hidden_base_components || [];
+      const normalizedCustomComponents = Array.isArray(apiCustomComponents)
+        ? apiCustomComponents
+            .filter((component) => component?.key && component?.name)
+            .map((component) => ({
+              key: String(component.key),
+              name: String(component.name),
+              weight: Number(component.weight || 0),
+            }))
+        : [];
 
-      // Set default assessments if none
-      if (assessments.quizzes.length === 0) {
-        setAssessments({
-          quizzes: [
-            { id: 'q1', name: 'Quiz 1', max: 30, term: 'Prelim' },
-            { id: 'q2', name: 'Quiz 2', max: 20, term: 'Midterm' },
-          ],
-          exams: [
-            { id: 'e1', name: 'Midterm Exam', max: 100, term: 'Midterm' },
-            { id: 'e2', name: 'Final Exam', max: 100, term: 'Finals' },
-          ],
-          projects: [
-            { id: 'p1', name: 'Project 1', max: 50, term: 'Prefi' },
-          ],
+      setCustomComponents(normalizedCustomComponents);
+      setHiddenBaseComponents(Array.isArray(apiHiddenBase) ? apiHiddenBase.map((item) => String(item)) : []);
+
+      if (apiWeights && typeof apiWeights === 'object') {
+        const customWeightMap = normalizedCustomComponents.reduce((acc, component) => {
+          acc[component.key] = Number(component.weight || 0);
+          return acc;
+        }, {});
+        const normalizedWeights = {
+          quizzes: Number(apiWeights.quizzes ?? DEFAULT_WEIGHTS.quizzes),
+          exams: Number(apiWeights.exams ?? DEFAULT_WEIGHTS.exams),
+          projects: Number(apiWeights.projects ?? DEFAULT_WEIGHTS.projects),
+          attendance: Number(apiWeights.attendance ?? DEFAULT_WEIGHTS.attendance),
+          performance_task: Number(apiWeights.performance_task ?? DEFAULT_WEIGHTS.performance_task),
+          activity_task: Number(apiWeights.activity_task ?? DEFAULT_WEIGHTS.activity_task),
+          ...customWeightMap,
+        };
+        setWeights(normalizedWeights);
+        setWeightDraft({
+          quizzes: String(normalizedWeights.quizzes),
+          exams: String(normalizedWeights.exams),
+          projects: String(normalizedWeights.projects),
+          attendance: String(normalizedWeights.attendance),
+          performance_task: String(normalizedWeights.performance_task),
+          activity_task: String(normalizedWeights.activity_task),
+          ...Object.fromEntries(normalizedCustomComponents.map((component) => [component.key, String(customWeightMap[component.key] ?? 0)])),
+        });
+      } else {
+        setWeights(DEFAULT_WEIGHTS);
+        setWeightDraft({
+          quizzes: String(DEFAULT_WEIGHTS.quizzes),
+          exams: String(DEFAULT_WEIGHTS.exams),
+          projects: String(DEFAULT_WEIGHTS.projects),
+          attendance: String(DEFAULT_WEIGHTS.attendance),
+          performance_task: String(DEFAULT_WEIGHTS.performance_task),
+          activity_task: String(DEFAULT_WEIGHTS.activity_task),
         });
       }
+
+      setStudents(studentsData);
     } catch (err) {
       console.error('Error fetching grades:', err);
       // No fallback - show empty state
@@ -148,7 +259,7 @@ function Gradebook() {
     } finally {
       setLoading(false);
     }
-  }, [selectedSubjectId, assessments.quizzes.length]);
+  }, [selectedSubjectId]);
 
   useEffect(() => {
     fetchClasses();
@@ -164,7 +275,7 @@ function Gradebook() {
   const canEdit = ayIsActive && submissionWindowOpen && !isLocked;
 
   const visibleAssessments = (component) =>
-    assessments[component].filter(a => a.term === selectedTerm);
+    (assessments[component] || []).filter(a => a.term === selectedTerm);
 
   const componentMax = (component) => {
     const items = visibleAssessments(component);
@@ -183,10 +294,12 @@ function Gradebook() {
   };
 
   const computeFinal = (student) => {
-    const q = componentPercent(student, 'quizzes') * (weights.quizzes / 100);
-    const e = componentPercent(student, 'exams') * (weights.exams / 100);
-    const p = componentPercent(student, 'projects') * (weights.projects / 100);
-    return Math.round((q + e + p) * 100) / 100;
+    const total = tableComponentDefs.reduce((sum, component) => {
+      const componentWeight = Number(weights?.[component.key] || 0);
+      return sum + (componentPercent(student, component.key) * (componentWeight / 100));
+    }, 0);
+
+    return Math.round(total * 100) / 100;
   };
 
   const updateScore = async (studentId, component, assessmentId, value) => {
@@ -228,29 +341,116 @@ function Gradebook() {
     return Math.max(0, Math.min(100, v));
   };
 
+  const handleWeightChange = (key, value) => {
+    setWeightDraft(prev => ({ ...prev, [key]: value }));
+  };
+
+  const weightDraftTotal = useMemo(() => {
+    return Object.values(weightDraft).reduce((sum, value) => sum + Number(value || 0), 0);
+  }, [weightDraft]);
+
+  const saveWeights = async () => {
+    if (!selectedSubjectId || !canEdit) return;
+
+    const payload = {
+      quizzes: clampTo100(Number(weightDraft.quizzes || 0)),
+      exams: clampTo100(Number(weightDraft.exams || 0)),
+      projects: clampTo100(Number(weightDraft.projects || 0)),
+      attendance: clampTo100(Number(weightDraft.attendance || 0)),
+      performance_task: clampTo100(Number(weightDraft.performance_task || 0)),
+      activity_task: clampTo100(Number(weightDraft.activity_task || 0)),
+      custom_components: customComponents.map((component) => ({
+        key: component.key,
+        name: component.name,
+        weight: clampTo100(Number(weightDraft[component.key] ?? component.weight ?? 0)),
+      })),
+      hidden_base_components: hiddenBaseComponents,
+    };
+
+    const total = payload.quizzes
+      + payload.exams
+      + payload.projects
+      + payload.attendance
+      + payload.performance_task
+      + payload.activity_task
+      + payload.custom_components.reduce((sum, component) => sum + Number(component.weight || 0), 0);
+    if (Math.abs(total - 100) > 0.001) {
+      alert(`Total grading weight must equal 100%. Current total: ${total.toFixed(2)}%`);
+      return;
+    }
+
+    setSavingWeights(true);
+    try {
+      const response = await classService.updateGradingScheme(selectedSubjectId, payload);
+      const data = response?.data ?? response;
+      const apiWeights = data?.weights ?? payload;
+      const normalized = {
+        quizzes: Number(apiWeights.quizzes ?? payload.quizzes),
+        exams: Number(apiWeights.exams ?? payload.exams),
+        projects: Number(apiWeights.projects ?? payload.projects),
+        attendance: Number(apiWeights.attendance ?? payload.attendance),
+        performance_task: Number(apiWeights.performance_task ?? payload.performance_task),
+        activity_task: Number(apiWeights.activity_task ?? payload.activity_task),
+        ...Object.fromEntries((data?.custom_components || payload.custom_components || []).map((component) => [component.key, Number(component.weight || 0)])),
+      };
+      setWeights(normalized);
+      setCustomComponents((data?.custom_components || payload.custom_components || []).map((component) => ({
+        key: String(component.key),
+        name: String(component.name),
+        weight: Number(component.weight || 0),
+      })));
+      setHiddenBaseComponents((data?.hidden_base_components || payload.hidden_base_components || []).map((item) => String(item)));
+      setWeightDraft({
+        quizzes: String(normalized.quizzes),
+        exams: String(normalized.exams),
+        projects: String(normalized.projects),
+        attendance: String(normalized.attendance),
+        performance_task: String(normalized.performance_task),
+        activity_task: String(normalized.activity_task),
+        ...Object.fromEntries((data?.custom_components || payload.custom_components || []).map((component) => [component.key, String(component.weight || 0)])),
+      });
+    } catch (err) {
+      console.error('Error saving grading scheme:', err);
+      alert('Failed to save grading weights. Please try again.');
+    } finally {
+      setSavingWeights(false);
+    }
+  };
+
+  const resetWeightDraftToDefault = () => {
+    setWeightDraft({
+      quizzes: String(DEFAULT_WEIGHTS.quizzes),
+      exams: String(DEFAULT_WEIGHTS.exams),
+      projects: String(DEFAULT_WEIGHTS.projects),
+      attendance: String(DEFAULT_WEIGHTS.attendance),
+      performance_task: String(DEFAULT_WEIGHTS.performance_task),
+      activity_task: String(DEFAULT_WEIGHTS.activity_task),
+    });
+  };
+
   const exportCSV = () => {
-    const qa = visibleAssessments('quizzes');
-    const ea = visibleAssessments('exams');
-    const pa = visibleAssessments('projects');
+    const exportComponents = ['quizzes', 'exams', 'projects', 'performance_task', 'activity_task'];
+    const assessmentsByComponent = exportComponents.reduce((acc, key) => {
+      acc[key] = visibleAssessments(key);
+      return acc;
+    }, {});
+
     const header = [
       'Student',
-      'Quizzes %',
-      ...qa.map(a => `${a.name} (${a.max})`),
-      'Exams %',
-      ...ea.map(a => `${a.name} (${a.max})`),
-      'Projects %',
-      ...pa.map(a => `${a.name} (${a.max})`),
+      ...exportComponents.flatMap((key) => {
+        const label = GRADE_COMPONENTS.find(c => c.key === key)?.label || key;
+        return [`${label} %`, ...assessmentsByComponent[key].map(a => `${a.name} (${a.max})`)];
+      }),
       'Final',
     ];
+
     const rows = students.map(s => {
       return [
         s.name,
-        componentPercent(s,'quizzes'),
-        ...qa.map(a => s.scores?.quizzes?.[a.id] ?? ''),
-        componentPercent(s,'exams'),
-        ...ea.map(a => s.scores?.exams?.[a.id] ?? ''),
-        componentPercent(s,'projects'),
-        ...pa.map(a => s.scores?.projects?.[a.id] ?? ''),
+        ...exportComponents.flatMap((key) => [
+          componentPercent(s, key),
+          ...assessmentsByComponent[key].map(a => s.scores?.[key]?.[a.id] ?? ''),
+        ]),
         computeFinal(s),
       ];
     });
@@ -304,12 +504,13 @@ function Gradebook() {
   };
 
   // Add assessment per component for current term
-  const [showAddForm, setShowAddForm] = useState({ quizzes: false, exams: false, projects: false });
+  const [showAddForm, setShowAddForm] = useState({ quizzes: false, exams: false, projects: false, performance_task: false, activity_task: false });
   const [newAssessment, setNewAssessment] = useState({ component: '', name: '', max: 10 });
 
   const openAddForm = (component) => {
+    const componentLabel = tableComponentDefs.find(c => c.key === component)?.label || component;
     setShowAddForm(prev => ({ ...prev, [component]: true }));
-    setNewAssessment({ component, name: `${component[0].toUpperCase()+component.slice(1)} ${visibleAssessments(component).length + 1}`, max: 10 });
+    setNewAssessment({ component, name: `${componentLabel} ${visibleAssessments(component).length + 1}`, max: 10 });
   };
 
   const addAssessment = () => {
@@ -436,42 +637,187 @@ function Gradebook() {
             </div>
 
             {/* Weights */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-              <div className="bg-white p-5 rounded-lg border border-gray-200 shadow-sm flex items-center justify-between">
+            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+              {!hiddenBaseComponents.includes('quizzes') && <div className="bg-white p-5 rounded-lg border border-gray-200 shadow-sm flex items-center justify-between">
                 <div>
                   <p className="text-sm text-gray-600">Quizzes Weight</p>
-                  <p className="text-2xl font-bold text-gray-900">{weights.quizzes}%</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      step="0.01"
+                      value={weightDraft.quizzes}
+                      onChange={(e) => handleWeightChange('quizzes', e.target.value)}
+                      onFocus={(e) => e.target.select()}
+                      disabled={!canEdit || savingWeights}
+                      className={`w-24 px-2 py-1 border rounded text-sm font-semibold ${canEdit ? 'border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500' : 'bg-gray-100 border-gray-200 text-gray-500'}`}
+                    />
+                    <span className="text-sm text-gray-700">%</span>
+                  </div>
                 </div>
                 <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
                   <Calculator className="w-6 h-6 text-blue-600" />
                 </div>
-              </div>
-              <div className="bg-white p-5 rounded-lg border border-gray-200 shadow-sm flex items-center justify-between">
+              </div>}
+              {!hiddenBaseComponents.includes('exams') && <div className="bg-white p-5 rounded-lg border border-gray-200 shadow-sm flex items-center justify-between">
                 <div>
                   <p className="text-sm text-gray-600">Exams Weight</p>
-                  <p className="text-2xl font-bold text-gray-900">{weights.exams}%</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      step="0.01"
+                      value={weightDraft.exams}
+                      onChange={(e) => handleWeightChange('exams', e.target.value)}
+                      onFocus={(e) => e.target.select()}
+                      disabled={!canEdit || savingWeights}
+                      className={`w-24 px-2 py-1 border rounded text-sm font-semibold ${canEdit ? 'border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500' : 'bg-gray-100 border-gray-200 text-gray-500'}`}
+                    />
+                    <span className="text-sm text-gray-700">%</span>
+                  </div>
                 </div>
                 <div className="w-12 h-12 bg-indigo-100 rounded-lg flex items-center justify-center">
                   <Calculator className="w-6 h-6 text-indigo-600" />
                 </div>
-              </div>
-              <div className="bg-white p-5 rounded-lg border border-gray-200 shadow-sm flex items-center justify-between">
+              </div>}
+              {!hiddenBaseComponents.includes('projects') && <div className="bg-white p-5 rounded-lg border border-gray-200 shadow-sm flex items-center justify-between">
                 <div>
                   <p className="text-sm text-gray-600">Projects Weight</p>
-                  <p className="text-2xl font-bold text-gray-900">{weights.projects}%</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      step="0.01"
+                      value={weightDraft.projects}
+                      onChange={(e) => handleWeightChange('projects', e.target.value)}
+                      onFocus={(e) => e.target.select()}
+                      disabled={!canEdit || savingWeights}
+                      className={`w-24 px-2 py-1 border rounded text-sm font-semibold ${canEdit ? 'border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500' : 'bg-gray-100 border-gray-200 text-gray-500'}`}
+                    />
+                    <span className="text-sm text-gray-700">%</span>
+                  </div>
                 </div>
                 <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
                   <Calculator className="w-6 h-6 text-green-600" />
                 </div>
-              </div>
-              <div className="bg-white p-5 rounded-lg border border-gray-200 shadow-sm flex items-center justify-between">
+              </div>}
+              {!hiddenBaseComponents.includes('attendance') && <div className="bg-white p-5 rounded-lg border border-gray-200 shadow-sm flex items-center justify-between">
                 <div>
                   <p className="text-sm text-gray-600">Attendance Weight</p>
-                  <p className="text-2xl font-bold text-gray-900">{weights.attendance}%</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      step="0.01"
+                      value={weightDraft.attendance}
+                      onChange={(e) => handleWeightChange('attendance', e.target.value)}
+                      onFocus={(e) => e.target.select()}
+                      disabled={!canEdit || savingWeights}
+                      className={`w-24 px-2 py-1 border rounded text-sm font-semibold ${canEdit ? 'border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500' : 'bg-gray-100 border-gray-200 text-gray-500'}`}
+                    />
+                    <span className="text-sm text-gray-700">%</span>
+                  </div>
                 </div>
                 <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
                   <Calculator className="w-6 h-6 text-purple-600" />
                 </div>
+              </div>}
+              {!hiddenBaseComponents.includes('performance_task') && <div className="bg-white p-5 rounded-lg border border-gray-200 shadow-sm flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-gray-600">Performance Task Weight</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      step="0.01"
+                      value={weightDraft.performance_task}
+                      onChange={(e) => handleWeightChange('performance_task', e.target.value)}
+                      onFocus={(e) => e.target.select()}
+                      disabled={!canEdit || savingWeights}
+                      className={`w-24 px-2 py-1 border rounded text-sm font-semibold ${canEdit ? 'border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500' : 'bg-gray-100 border-gray-200 text-gray-500'}`}
+                    />
+                    <span className="text-sm text-gray-700">%</span>
+                  </div>
+                </div>
+                <div className="w-12 h-12 bg-rose-100 rounded-lg flex items-center justify-center">
+                  <Calculator className="w-6 h-6 text-rose-600" />
+                </div>
+              </div>}
+              {!hiddenBaseComponents.includes('activity_task') && <div className="bg-white p-5 rounded-lg border border-gray-200 shadow-sm flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-gray-600">Activity Task Weight</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      step="0.01"
+                      value={weightDraft.activity_task}
+                      onChange={(e) => handleWeightChange('activity_task', e.target.value)}
+                      onFocus={(e) => e.target.select()}
+                      disabled={!canEdit || savingWeights}
+                      className={`w-24 px-2 py-1 border rounded text-sm font-semibold ${canEdit ? 'border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500' : 'bg-gray-100 border-gray-200 text-gray-500'}`}
+                    />
+                    <span className="text-sm text-gray-700">%</span>
+                  </div>
+                </div>
+                <div className="w-12 h-12 bg-cyan-100 rounded-lg flex items-center justify-center">
+                  <Calculator className="w-6 h-6 text-cyan-600" />
+                </div>
+              </div>}
+              {customComponents.map((component) => (
+                <div key={component.key} className="bg-white p-5 rounded-lg border border-gray-200 shadow-sm flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-gray-600">{component.name} Weight</p>
+                    <div className="flex items-center gap-2 mt-1">
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        step="0.01"
+                        value={weightDraft[component.key] ?? String(component.weight ?? 0)}
+                        onChange={(e) => handleWeightChange(component.key, e.target.value)}
+                        onFocus={(e) => e.target.select()}
+                        disabled={!canEdit || savingWeights}
+                        className={`w-24 px-2 py-1 border rounded text-sm font-semibold ${canEdit ? 'border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500' : 'bg-gray-100 border-gray-200 text-gray-500'}`}
+                      />
+                      <span className="text-sm text-gray-700">%</span>
+                    </div>
+                  </div>
+                  <div className="w-12 h-12 bg-slate-100 rounded-lg flex items-center justify-center">
+                    <Calculator className="w-6 h-6 text-slate-600" />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-between mb-6 bg-white border border-gray-200 rounded-lg px-4 py-3">
+              <div className="text-sm">
+                <span className="text-gray-600">Total weight: </span>
+                <span className={`font-semibold ${Math.abs(weightDraftTotal - 100) < 0.001 ? 'text-emerald-700' : 'text-amber-700'}`}>
+                  {weightDraftTotal.toFixed(2)}%
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={resetWeightDraftToDefault}
+                  disabled={!canEdit || savingWeights}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium ${canEdit && !savingWeights ? 'bg-gray-100 text-gray-700 hover:bg-gray-200' : 'bg-gray-200 text-gray-500 cursor-not-allowed'}`}
+                >
+                  Reset to Default
+                </button>
+                <button
+                  onClick={saveWeights}
+                  disabled={!canEdit || savingWeights || Math.abs(weightDraftTotal - 100) >= 0.001}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium ${canEdit && !savingWeights && Math.abs(weightDraftTotal - 100) < 0.001 ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-200 text-gray-500 cursor-not-allowed'}`}
+                >
+                  {savingWeights ? 'Saving Weights...' : 'Save Weights'}
+                </button>
               </div>
             </div>
 
@@ -497,12 +843,12 @@ function Gradebook() {
 
               {/* Component headers with add buttons */}
               <div className="px-4 pt-4 flex flex-wrap gap-4">
-                {['quizzes','exams','projects'].map(comp => (
-                  <div key={comp} className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-gray-900 capitalize">{comp}</span>
-                    <span className="text-xs text-gray-600">(Max total: {componentMax(comp)})</span>
+                {tableComponentDefs.map(comp => (
+                  <div key={comp.key} className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-gray-900">{comp.label}</span>
+                    <span className="text-xs text-gray-600">(Max total: {componentMax(comp.key)})</span>
                     <button
-                      onClick={() => openAddForm(comp)}
+                      onClick={() => openAddForm(comp.key)}
                       disabled={!canEdit}
                       className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium ${canEdit ? 'bg-blue-100 text-blue-700 hover:bg-blue-200' : 'bg-gray-100 text-gray-500 cursor-not-allowed'}`}
                     >
@@ -513,7 +859,7 @@ function Gradebook() {
               </div>
 
               {/* Inline add form */}
-              {(showAddForm.quizzes || showAddForm.exams || showAddForm.projects) && (
+              {Object.values(showAddForm).some(Boolean) && (
                 <div className="px-4 pt-2">
                   <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 flex items-center gap-3">
                     <span className="text-xs text-gray-700">New {newAssessment.component} for {selectedTerm}</span>
@@ -533,7 +879,7 @@ function Gradebook() {
                       className="w-24 px-2 py-1 text-sm border border-gray-300 rounded"
                     />
                     <button onClick={addAssessment} className="px-3 py-1 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700">Add Assessment</button>
-                    <button onClick={()=>setShowAddForm({quizzes:false,exams:false,projects:false})} className="px-3 py-1 bg-gray-100 text-gray-700 text-xs font-medium rounded hover:bg-gray-200">Cancel</button>
+                    <button onClick={()=>setShowAddForm({})} className="px-3 py-1 bg-gray-100 text-gray-700 text-xs font-medium rounded hover:bg-gray-200">Cancel</button>
                   </div>
                 </div>
               )}
@@ -544,45 +890,36 @@ function Gradebook() {
                     {/* Group header */}
                     <tr className="bg-gray-100 text-gray-900 text-sm">
                       <th className="text-left py-3 px-4 border-r-2 border-gray-300">Student</th>
-                      {/* Quizzes group */}
-                      <th className="text-left py-3 px-4 border-r-2 border-gray-300" colSpan={1 + visibleAssessments('quizzes').length}>Quizzes ({weights.quizzes}%)</th>
-                      {/* Exams group */}
-                      <th className="text-left py-3 px-4 border-r-2 border-gray-300" colSpan={1 + visibleAssessments('exams').length}>Exams ({weights.exams}%)</th>
-                      {/* Projects group */}
-                      <th className="text-left py-3 px-4 border-r-2 border-gray-300" colSpan={1 + visibleAssessments('projects').length}>Projects ({weights.projects}%)</th>
+                      {tableComponentDefs.map((component) => (
+                        <th key={component.key} className="text-left py-3 px-4 border-r-2 border-gray-300" colSpan={1 + visibleAssessments(component.key).length}>
+                          {component.label} ({weights[component.key] || 0}%)
+                        </th>
+                      ))}
                       <th className="text-left py-3 px-4">Final</th>
                     </tr>
                     {/* Sub headers: % + each assessment name */}
                     <tr className="bg-gray-50 text-gray-900 text-xs">
                       <th className="py-2 px-4 border-r-2 border-gray-300"></th>
-                      <th className="py-2 px-4">%</th>
-                      {visibleAssessments('quizzes').map((a, idx) => (
-                        <th key={a.id} className={`py-2 px-4 ${idx === visibleAssessments('quizzes').length - 1 ? 'border-r-2 border-gray-300' : ''}`}>{a.name}</th>
-                      ))}
-                      <th className="py-2 px-4">%</th>
-                      {visibleAssessments('exams').map((a, idx) => (
-                        <th key={a.id} className={`py-2 px-4 ${idx === visibleAssessments('exams').length - 1 ? 'border-r-2 border-gray-300' : ''}`}>{a.name}</th>
-                      ))}
-                      <th className="py-2 px-4">%</th>
-                      {visibleAssessments('projects').map((a, idx) => (
-                        <th key={a.id} className={`py-2 px-4 ${idx === visibleAssessments('projects').length - 1 ? 'border-r-2 border-gray-300' : ''}`}>{a.name}</th>
+                      {tableComponentDefs.map((component) => (
+                        <Fragment key={`sub-${component.key}`}>
+                          <th key={`${component.key}-pct`} className="py-2 px-4">%</th>
+                          {visibleAssessments(component.key).map((a, idx) => (
+                            <th key={a.id} className={`py-2 px-4 ${idx === visibleAssessments(component.key).length - 1 ? 'border-r-2 border-gray-300' : ''}`}>{a.name}</th>
+                          ))}
+                        </Fragment>
                       ))}
                       <th className="py-2 px-4"></th>
                     </tr>
                     {/* Max row */}
                     <tr className="text-gray-600 text-xs">
                       <th className="py-2 px-4 text-left border-r-2 border-gray-300">Max</th>
-                      <th className="py-2 px-4">100</th>
-                      {visibleAssessments('quizzes').map((a, idx) => (
-                        <th key={a.id} className={`py-2 px-4 ${idx === visibleAssessments('quizzes').length - 1 ? 'border-r-2 border-gray-300' : ''}`}>{a.max}</th>
-                      ))}
-                      <th className="py-2 px-4">100</th>
-                      {visibleAssessments('exams').map((a, idx) => (
-                        <th key={a.id} className={`py-2 px-4 ${idx === visibleAssessments('exams').length - 1 ? 'border-r-2 border-gray-300' : ''}`}>{a.max}</th>
-                      ))}
-                      <th className="py-2 px-4">100</th>
-                      {visibleAssessments('projects').map((a, idx) => (
-                        <th key={a.id} className={`py-2 px-4 ${idx === visibleAssessments('projects').length - 1 ? 'border-r-2 border-gray-300' : ''}`}>{a.max}</th>
+                      {tableComponentDefs.map((component) => (
+                        <Fragment key={`max-${component.key}`}>
+                          <th key={`${component.key}-max`} className="py-2 px-4">100</th>
+                          {visibleAssessments(component.key).map((a, idx) => (
+                            <th key={a.id} className={`py-2 px-4 ${idx === visibleAssessments(component.key).length - 1 ? 'border-r-2 border-gray-300' : ''}`}>{a.max}</th>
+                          ))}
+                        </Fragment>
                       ))}
                       <th className="py-2 px-4">100</th>
                     </tr>
@@ -591,62 +928,27 @@ function Gradebook() {
                     {students.map(s => (
                   <tr key={s.id} className="border-t border-gray-200">
                     <td className="py-3 px-4 text-sm font-medium text-gray-900 border-r-2 border-gray-300">{s.name}</td>
-                    {/* Quizzes percent */}
-                    <td className="py-3 px-4 text-sm text-gray-900 font-semibold">{componentPercent(s,'quizzes')}%</td>
-                    {/* Quizzes assessments */}
-                    {visibleAssessments('quizzes').map((a, idx) => (
-                      <td key={a.id} className={`py-3 px-4 ${idx === visibleAssessments('quizzes').length - 1 ? 'border-r-2 border-gray-300' : ''}`}>
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="number"
-                            min={0}
-                            max={a.max}
-                            value={s.scores?.quizzes?.[a.id] ?? 0}
-                            onChange={(e) => updateScore(s.id,'quizzes',a.id,e.target.value)}
-                            disabled={!canEdit}
-                            className={`w-24 px-2 py-1 border rounded text-sm ${canEdit ? 'border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500' : 'bg-gray-100 border-gray-200 text-gray-500'}`}
-                          />
-                          <span className="text-xs text-gray-600">/ {a.max}</span>
-                        </div>
-                      </td>
-                    ))}
-                    {/* Exams percent */}
-                    <td className="py-3 px-4 text-sm text-gray-900 font-semibold">{componentPercent(s,'exams')}%</td>
-                    {/* Exams assessments */}
-                    {visibleAssessments('exams').map((a, idx) => (
-                      <td key={a.id} className={`py-3 px-4 ${idx === visibleAssessments('exams').length - 1 ? 'border-r-2 border-gray-300' : ''}`}>
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="number"
-                            min={0}
-                            max={a.max}
-                            value={s.scores?.exams?.[a.id] ?? 0}
-                            onChange={(e) => updateScore(s.id,'exams',a.id,e.target.value)}
-                            disabled={!canEdit}
-                            className={`w-24 px-2 py-1 border rounded text-sm ${canEdit ? 'border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500' : 'bg-gray-100 border-gray-200 text-gray-500'}`}
-                          />
-                          <span className="text-xs text-gray-600">/ {a.max}</span>
-                        </div>
-                      </td>
-                    ))}
-                    {/* Projects percent */}
-                    <td className="py-3 px-4 text-sm text-gray-900 font-semibold">{componentPercent(s,'projects')}%</td>
-                    {/* Projects assessments */}
-                    {visibleAssessments('projects').map((a, idx) => (
-                      <td key={a.id} className={`py-3 px-4 ${idx === visibleAssessments('projects').length - 1 ? 'border-r-2 border-gray-300' : ''}`}>
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="number"
-                            min={0}
-                            max={a.max}
-                            value={s.scores?.projects?.[a.id] ?? 0}
-                            onChange={(e) => updateScore(s.id,'projects',a.id,e.target.value)}
-                            disabled={!canEdit}
-                            className={`w-24 px-2 py-1 border rounded text-sm ${canEdit ? 'border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500' : 'bg-gray-100 border-gray-200 text-gray-500'}`}
-                          />
-                          <span className="text-xs text-gray-600">/ {a.max}</span>
-                        </div>
-                      </td>
+                    {tableComponentDefs.map((component) => (
+                      <Fragment key={`${s.id}-${component.key}`}>
+                        <td key={`${s.id}-${component.key}-pct`} className="py-3 px-4 text-sm text-gray-900 font-semibold">{componentPercent(s,component.key)}%</td>
+                        {visibleAssessments(component.key).map((a, idx) => (
+                          <td key={`${s.id}-${a.id}`} className={`py-3 px-4 ${idx === visibleAssessments(component.key).length - 1 ? 'border-r-2 border-gray-300' : ''}`}>
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="number"
+                                min={0}
+                                max={a.max}
+                                value={s.scores?.[component.key]?.[a.id] ?? ''}
+                                onChange={(e) => updateScore(s.id,component.key,a.id,e.target.value)}
+                                onFocus={(e) => e.target.select()}
+                                disabled={!canEdit}
+                                className={`w-24 px-2 py-1 border rounded text-sm ${canEdit ? 'border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500' : 'bg-gray-100 border-gray-200 text-gray-500'}`}
+                              />
+                              <span className="text-xs text-gray-600">/ {a.max}</span>
+                            </div>
+                          </td>
+                        ))}
+                      </Fragment>
                     ))}
                     {/* Final */}
                     <td className="py-3 px-4 text-sm font-semibold text-gray-900">{computeFinal(s)}%</td>

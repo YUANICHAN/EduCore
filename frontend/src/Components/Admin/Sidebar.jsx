@@ -216,7 +216,6 @@ function Sidebar({ activeItem, setActiveItem }) {
     { name: "Academic Year", icon: Calendar, path: "/admin/academic-year" },
     { name: "Reports", icon: FileText, path: "/admin/reports" },
     { name: "Settings", icon: Settings, path: "/admin/settings" },
-    { name: "Logout", icon: LogOut, path: "#", isLogout: true },
   ];
 
   const handleNavigation = (path) => {
@@ -443,6 +442,17 @@ function Sidebar({ activeItem, setActiveItem }) {
                   {roleLabel}
                 </p>
               </div>
+            )}
+            {isOpen && (
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="ml-auto h-9 w-9 rounded-full border border-white/15 text-[#e31b23] hover:bg-[#e31b23]/10 flex items-center justify-center"
+                aria-label="Logout"
+                title="Logout"
+              >
+                <LogOut className="w-5 h-5" />
+              </button>
             )}
           </div>
         </div>

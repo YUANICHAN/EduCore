@@ -1,5 +1,12 @@
 import api from './api';
 
+const inFlightGetAllRequests = new Map();
+
+const buildStableParamsKey = (params = {}) => {
+  const entries = Object.entries(params).sort(([a], [b]) => a.localeCompare(b));
+  return JSON.stringify(entries);
+};
+
 const classService = {
   /**
    * Get all classes
@@ -7,8 +14,20 @@ const classService = {
    * @returns {Promise}
    */
   getAll: async (params = {}) => {
-    const response = await api.get('/classes', { params });
-    return response.data;
+    const key = buildStableParamsKey(params);
+    if (inFlightGetAllRequests.has(key)) {
+      return inFlightGetAllRequests.get(key);
+    }
+
+    const requestPromise = api
+      .get('/classes', { params })
+      .then((response) => response.data)
+      .finally(() => {
+        inFlightGetAllRequests.delete(key);
+      });
+
+    inFlightGetAllRequests.set(key, requestPromise);
+    return requestPromise;
   },
 
   /**
@@ -102,6 +121,27 @@ const classService = {
    */
   getGrades: async (classId) => {
     const response = await api.get(`/classes/${classId}/grades`);
+    return response.data;
+  },
+
+  /**
+   * Get grading scheme for a class
+   * @param {number} classId
+   * @returns {Promise}
+   */
+  getGradingScheme: async (classId) => {
+    const response = await api.get(`/classes/${classId}/grading-scheme`);
+    return response.data;
+  },
+
+  /**
+   * Update grading scheme for a class
+   * @param {number} classId
+   * @param {{quizzes:number, exams:number, projects:number, attendance:number}} payload
+   * @returns {Promise}
+   */
+  updateGradingScheme: async (classId, payload) => {
+    const response = await api.put(`/classes/${classId}/grading-scheme`, payload);
     return response.data;
   },
 

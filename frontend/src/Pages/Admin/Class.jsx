@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Swal from 'sweetalert2';
-import { Calendar, Loader2, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
+import { Calendar, Calculator, Loader2, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
 import Sidebar from '../../Components/Admin/Sidebar.jsx';
 import roomService from '../../service/roomService';
 import buildingService from '../../service/buildingService';
@@ -182,6 +182,34 @@ function extractPagination(payload, fallbackPerPage) {
   };
 }
 
+function createDefaultWeightDraft() {
+  return {
+    quizzes: '20',
+    exams: '50',
+    projects: '20',
+    attendance: '10',
+    performance_task: '0',
+    activity_task: '0',
+  };
+}
+
+const BASE_WEIGHT_COMPONENTS = [
+  { key: 'quizzes', label: 'Quiz Weight' },
+  { key: 'exams', label: 'Exam Weight' },
+  { key: 'projects', label: 'Project Weight' },
+  { key: 'attendance', label: 'Attendance Weight' },
+  { key: 'performance_task', label: 'Performance Task Weight' },
+  { key: 'activity_task', label: 'Activity Task Weight' },
+];
+
+function createEmptyCustomWeight() {
+  return {
+    key: `custom_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+    name: '',
+    weight: '0',
+  };
+}
+
 function Class() {
   const [activeItem, setActiveItem] = useState('Classes');
   const [classes, setClasses] = useState([]);
@@ -214,6 +242,13 @@ function Class() {
   const [editingScheduleId, setEditingScheduleId] = useState(null);
   const [scheduleBuildingId, setScheduleBuildingId] = useState('');
   const [scheduleRoomId, setScheduleRoomId] = useState('');
+
+  const [showWeightModal, setShowWeightModal] = useState(false);
+  const [selectedWeightClass, setSelectedWeightClass] = useState(null);
+  const [weightDraft, setWeightDraft] = useState(createDefaultWeightDraft());
+  const [visibleBaseWeightKeys, setVisibleBaseWeightKeys] = useState(BASE_WEIGHT_COMPONENTS.map((component) => component.key));
+  const [customWeightDraft, setCustomWeightDraft] = useState([]);
+  const [savingWeights, setSavingWeights] = useState(false);
 
   const [form, setForm] = useState({
     day: '',
@@ -619,6 +654,170 @@ function Class() {
     }
   };
 
+  const openWeightModal = async (cls) => {
+    setSelectedWeightClass(cls);
+    setShowWeightModal(true);
+    setWeightDraft(createDefaultWeightDraft());
+    setVisibleBaseWeightKeys(BASE_WEIGHT_COMPONENTS.map((component) => component.key));
+    setCustomWeightDraft([]);
+
+    try {
+      const res = await apiRequest(`/classes/${cls.id}/grading-scheme`);
+      const payload = res?.data || res;
+      const weights = payload?.weights || {};
+      const customComponents = Array.isArray(payload?.custom_components) ? payload.custom_components : [];
+      const hiddenBaseComponents = Array.isArray(payload?.hidden_base_components) ? payload.hidden_base_components : [];
+
+      const nextWeightDraft = {
+        quizzes: String(weights.quizzes ?? 20),
+        exams: String(weights.exams ?? 50),
+        projects: String(weights.projects ?? 20),
+        attendance: String(weights.attendance ?? 10),
+        performance_task: String(weights.performance_task ?? 0),
+        activity_task: String(weights.activity_task ?? 0),
+      };
+
+      setWeightDraft(nextWeightDraft);
+      if (hiddenBaseComponents.length > 0) {
+        setVisibleBaseWeightKeys(
+          BASE_WEIGHT_COMPONENTS
+            .filter((component) => !hiddenBaseComponents.includes(component.key))
+            .map((component) => component.key)
+        );
+      } else {
+        // Backward compatibility for existing saved schemes before hidden-base support.
+        setVisibleBaseWeightKeys(
+          BASE_WEIGHT_COMPONENTS
+            .filter((component) => Number(nextWeightDraft[component.key] || 0) > 0)
+            .map((component) => component.key)
+        );
+      }
+
+      setCustomWeightDraft(customComponents.map((component, index) => ({
+        key: String(component.key || `custom_${index}`),
+        name: String(component.name || ''),
+        weight: String(component.weight ?? 0),
+      })));
+    } catch (err) {
+      await Swal.fire({
+        icon: 'error',
+        title: 'Failed to load grading scheme',
+        text: err.message || 'Unable to fetch class weights.',
+      });
+    }
+  };
+
+  const closeWeightModal = () => {
+    setShowWeightModal(false);
+    setSelectedWeightClass(null);
+    setWeightDraft(createDefaultWeightDraft());
+    setVisibleBaseWeightKeys(BASE_WEIGHT_COMPONENTS.map((component) => component.key));
+    setCustomWeightDraft([]);
+  };
+
+  const removeBaseWeightField = (key) => {
+    setVisibleBaseWeightKeys((prev) => prev.filter((item) => item !== key));
+    setWeightDraft((prev) => ({ ...prev, [key]: '0' }));
+  };
+
+  const restoreBaseWeightFields = () => {
+    setVisibleBaseWeightKeys(BASE_WEIGHT_COMPONENTS.map((component) => component.key));
+  };
+
+  const weightTotal = useMemo(() => {
+    return [
+      Number(weightDraft.quizzes || 0),
+      Number(weightDraft.exams || 0),
+      Number(weightDraft.projects || 0),
+      Number(weightDraft.attendance || 0),
+      Number(weightDraft.performance_task || 0),
+      Number(weightDraft.activity_task || 0),
+      ...customWeightDraft.map((component) => Number(component.weight || 0)),
+    ].reduce((sum, value) => sum + value, 0);
+  }, [weightDraft, customWeightDraft]);
+
+  const saveWeightScheme = async () => {
+    if (!selectedWeightClass) return;
+
+    const payload = {
+      quizzes: Number(weightDraft.quizzes || 0),
+      exams: Number(weightDraft.exams || 0),
+      projects: Number(weightDraft.projects || 0),
+      attendance: Number(weightDraft.attendance || 0),
+      performance_task: Number(weightDraft.performance_task || 0),
+      activity_task: Number(weightDraft.activity_task || 0),
+      custom_components: customWeightDraft
+        .filter((component) => String(component.name || '').trim() !== '')
+        .map((component) => ({
+          key: String(component.key || '').trim() || undefined,
+          name: String(component.name || '').trim(),
+          weight: Number(component.weight || 0),
+        })),
+      hidden_base_components: BASE_WEIGHT_COMPONENTS
+        .map((component) => component.key)
+        .filter((key) => !visibleBaseWeightKeys.includes(key)),
+    };
+
+    const total = payload.quizzes
+      + payload.exams
+      + payload.projects
+      + payload.attendance
+      + payload.performance_task
+      + payload.activity_task
+      + payload.custom_components.reduce((sum, component) => sum + Number(component.weight || 0), 0);
+    if (Math.abs(total - 100) > 0.001) {
+      await Swal.fire({
+        icon: 'warning',
+        title: 'Invalid total weight',
+        text: `Total weight must be exactly 100%. Current total: ${total.toFixed(2)}%`,
+      });
+      return;
+    }
+
+    setSavingWeights(true);
+    try {
+      await apiRequest(`/classes/${selectedWeightClass.id}/grading-scheme`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      });
+
+      await Swal.fire({
+        icon: 'success',
+        title: 'Weights saved',
+        timer: 1200,
+        showConfirmButton: false,
+      });
+
+      closeWeightModal();
+    } catch (err) {
+      await Swal.fire({
+        icon: 'error',
+        title: 'Save failed',
+        text: err.message || 'Unable to save grading weights.',
+      });
+    } finally {
+      setSavingWeights(false);
+    }
+  };
+
+  const removeCustomWeightRow = async (index) => {
+    const target = customWeightDraft[index];
+    const componentLabel = target?.name?.trim() || 'this custom component';
+
+    const result = await Swal.fire({
+      icon: 'warning',
+      title: 'Remove custom weight?',
+      text: `Are you sure you want to remove ${componentLabel}?`,
+      showCancelButton: true,
+      confirmButtonText: 'Remove',
+      cancelButtonText: 'Cancel',
+      confirmButtonColor: '#dc2626',
+    });
+
+    if (!result.isConfirmed) return;
+    setCustomWeightDraft((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
+  };
+
   return (
     <div className="flex h-screen">
       <Sidebar activeItem={activeItem} setActiveItem={setActiveItem} />
@@ -843,14 +1042,24 @@ function Class() {
                           </span>
                         </td>
                         <td className="px-5 py-4 text-right">
-                          <button
-                            type="button"
-                            onClick={() => openScheduleModal(cls)}
-                            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700"
-                          >
-                            <Calendar className="h-3.5 w-3.5" />
-                            Edit Schedule
-                          </button>
+                          <div className="flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => openWeightModal(cls)}
+                              className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-indigo-700"
+                            >
+                              <Calculator className="h-3.5 w-3.5" />
+                              Edit Weights
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openScheduleModal(cls)}
+                              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                            >
+                              <Calendar className="h-3.5 w-3.5" />
+                              Edit Schedule
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -1109,6 +1318,154 @@ function Class() {
                     </button>
                   </div>
                 )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showWeightModal && selectedWeightClass && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="mx-4 w-full max-w-2xl rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-4">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">
+                  Edit Grading Weights - {selectedWeightClass.class_code || `Class #${selectedWeightClass.id}`}
+                </h2>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  Configure class-level grading component weights. Total must equal 100%.
+                </p>
+              </div>
+              <button type="button" onClick={closeWeightModal} className="text-slate-400 hover:text-slate-600">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4 px-6 py-5">
+              <div className="grid gap-3 sm:grid-cols-2">
+                {BASE_WEIGHT_COMPONENTS.filter((item) => visibleBaseWeightKeys.includes(item.key)).map((item) => (
+                  <div key={item.key}>
+                    <div className="mb-2 flex items-center justify-between">
+                      <label className="block text-xs font-medium uppercase tracking-wide text-slate-600">{item.label}</label>
+                      <button
+                        type="button"
+                        onClick={() => removeBaseWeightField(item.key)}
+                        className="text-xs font-medium text-red-600 hover:text-red-700"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        step="0.01"
+                        value={weightDraft[item.key]}
+                        onChange={(e) => setWeightDraft((prev) => ({ ...prev, [item.key]: e.target.value }))}
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                      />
+                      <span className="text-sm text-slate-600">%</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {visibleBaseWeightKeys.length < BASE_WEIGHT_COMPONENTS.length && (
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={restoreBaseWeightFields}
+                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    Restore Base Components
+                  </button>
+                </div>
+              )}
+
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-slate-900">Custom Components</h3>
+                  <button
+                    type="button"
+                    onClick={() => setCustomWeightDraft((prev) => [...prev, createEmptyCustomWeight()])}
+                    className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Add Weight
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  {customWeightDraft.length === 0 ? (
+                    <p className="text-xs text-slate-500">No custom weight components yet.</p>
+                  ) : (
+                    customWeightDraft.map((component, index) => (
+                      <div key={component.key || index} className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_140px_auto]">
+                        <input
+                          type="text"
+                          value={component.name}
+                          onChange={(e) => setCustomWeightDraft((prev) => prev.map((item, itemIndex) => (
+                            itemIndex === index ? { ...item, name: e.target.value } : item
+                          )))}
+                          placeholder="Component name (e.g., Recitation)"
+                          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                        />
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            step="0.01"
+                            value={component.weight}
+                            onChange={(e) => setCustomWeightDraft((prev) => prev.map((item, itemIndex) => (
+                              itemIndex === index ? { ...item, weight: e.target.value } : item
+                            )))}
+                            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                          />
+                          <span className="text-sm text-slate-600">%</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeCustomWeightRow(index)}
+                          className="inline-flex items-center justify-center rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
+                <span className="text-slate-600">Total: </span>
+                <span className={`font-semibold ${Math.abs(weightTotal - 100) < 0.001 ? 'text-emerald-700' : 'text-amber-700'}`}>
+                  {weightTotal.toFixed(2)}%
+                </span>
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWeightDraft(createDefaultWeightDraft());
+                    setVisibleBaseWeightKeys(BASE_WEIGHT_COMPONENTS.map((component) => component.key));
+                    setCustomWeightDraft([]);
+                  }}
+                  className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Reset Defaults
+                </button>
+                <button
+                  type="button"
+                  onClick={saveWeightScheme}
+                  disabled={savingWeights || Math.abs(weightTotal - 100) >= 0.001}
+                  className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {savingWeights && <Loader2 className="h-4 w-4 animate-spin" />}
+                  Save Weights
+                </button>
               </div>
             </div>
           </div>
