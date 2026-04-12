@@ -14,6 +14,14 @@ class ScheduleController extends Controller
     public function index(Request $request)
     {
         $query = Schedule::with(['class.subject', 'class.teacher', 'class.section']);
+
+        // Filter by teacher (through class relation)
+        if ($request->filled('teacher_id')) {
+            $teacherId = $request->integer('teacher_id');
+            $query->whereHas('class', function ($q) use ($teacherId) {
+                $q->where('teacher_id', $teacherId)->where('status', 'active');
+            });
+        }
         
         // Filter by day
         if ($request->has('day_of_week')) {

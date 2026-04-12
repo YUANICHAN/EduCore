@@ -22,6 +22,43 @@ import {
   Save,
 } from 'lucide-react';
 
+function formatReadableDate(dateValue) {
+  if (!dateValue) return '';
+  const parsed = new Date(dateValue);
+  if (Number.isNaN(parsed.getTime())) return String(dateValue);
+  return parsed.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+}
+
+function getSemesterWindowForDate(startRaw, endRaw, targetDate) {
+  if (!startRaw || !endRaw || !targetDate) {
+    return { canMark: true, message: '' };
+  }
+
+  const selected = new Date(`${String(targetDate).slice(0, 10)}T00:00:00`);
+  const start = new Date(`${String(startRaw).slice(0, 10)}T00:00:00`);
+  const end = new Date(`${String(endRaw).slice(0, 10)}T23:59:59`);
+
+  if (Number.isNaN(selected.getTime()) || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return { canMark: true, message: '' };
+  }
+
+  if (selected < start) {
+    return {
+      canMark: false,
+      message: `Attendance will be available starting ${formatReadableDate(start)}.`,
+    };
+  }
+
+  if (selected > end) {
+    return {
+      canMark: false,
+      message: `This semester has ended on ${formatReadableDate(end)}. Attendance is now closed.`,
+    };
+  }
+
+  return { canMark: true, message: '' };
+}
+
 function TeacherAttendance() {
   const navigate = useNavigate();
   const [activeItem, setActiveItem] = useState('Attendance');
@@ -44,6 +81,17 @@ function TeacherAttendance() {
     if (Number.isNaN(parsed.getTime())) return '';
     return parsed.toLocaleDateString('en-US', { weekday: 'long' });
   }, [selectedDate]);
+
+  const attendanceWindowStatus = useMemo(() => {
+    if (!selectedClass) {
+      return { canMark: true, message: '' };
+    }
+    return getSemesterWindowForDate(
+      selectedClass.academicYearStartDate,
+      selectedClass.academicYearEndDate,
+      selectedDate
+    );
+  }, [selectedClass, selectedDate]);
 
   const classHasScheduleOnSelectedDate = useMemo(() => {
     if (!selectedClass || !selectedDateDay) return true;
@@ -144,6 +192,8 @@ function TeacherAttendance() {
         code: asText(c.subject?.subject_code) || asText(c.subject_code) || asText(c.code) || 'N/A',
         name: asText(c.subject?.subject_name) || asText(c.subject_name) || asText(c.name) || 'Class',
         section: asText(c.section?.section_code) || asText(c.section_name) || asText(c.section) || 'N/A',
+        academicYearStartDate: c.academic_year?.start_date || c.academicYear?.start_date || null,
+        academicYearEndDate: c.academic_year?.end_date || c.academicYear?.end_date || null,
         schedule: asText(c.schedule) || (
           c.schedules?.[0]
             ? `${asText(c.schedules[0]?.day_of_week, 'TBD')} ${asText(c.schedules[0]?.time_start, '')}${c.schedules[0]?.time_end ? ` - ${asText(c.schedules[0]?.time_end)}` : ''}`.trim()
@@ -165,6 +215,10 @@ function TeacherAttendance() {
   // Fetch students and attendance for selected class and date
   const fetchAttendance = useCallback(async () => {
     if (!selectedClassId || !selectedDate) return;
+    if (!attendanceWindowStatus.canMark) {
+      setStudents([]);
+      return;
+    }
 
     setLoading(true);
     setAttendanceEnabled(true); // Reset to true before checking
@@ -258,7 +312,7 @@ function TeacherAttendance() {
     } finally {
       setLoading(false);
     }
-  }, [selectedClassId, selectedDate]);
+  }, [selectedClassId, selectedDate, attendanceWindowStatus.canMark]);
 
   useEffect(() => {
     fetchClasses();
@@ -295,6 +349,16 @@ function TeacherAttendance() {
         icon: 'warning',
         title: 'Missing Selection',
         text: 'Please select a class and date before saving attendance.',
+        confirmButtonColor: '#2563eb',
+      });
+      return;
+    }
+
+    if (!attendanceWindowStatus.canMark) {
+      await Swal.fire({
+        icon: 'warning',
+        title: 'Attendance Unavailable',
+        text: attendanceWindowStatus.message || 'Attendance is not available for this semester period.',
         confirmButtonColor: '#2563eb',
       });
       return;
@@ -431,11 +495,19 @@ function TeacherAttendance() {
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               >
                 <option value="">Choose a class...</option>
-                {classes.map(cls => (
-                  <option key={cls.id} value={cls.id}>
-                    {cls.code} - {cls.name} (Section {cls.section})
-                  </option>
-                ))}
+                {classes.map(cls => {
+                  const classWindow = getSemesterWindowForDate(
+                    cls.academicYearStartDate,
+                    cls.academicYearEndDate,
+                    selectedDate
+                  );
+
+                  return (
+                    <option key={cls.id} value={cls.id}>
+                      {cls.code} - {cls.name} (Section {cls.section}){classWindow.canMark ? '' : ' [Attendance Closed]'}
+                    </option>
+                  );
+                })}
               </select>
             </div>
 
@@ -493,7 +565,14 @@ function TeacherAttendance() {
               </div>
             )}
 
-            {attendanceEnabled && !classHasScheduleOnSelectedDate && (
+            {attendanceEnabled && !attendanceWindowStatus.canMark && (
+              <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-800">
+                <p className="text-sm font-semibold">Attendance unavailable for this semester</p>
+                <p className="text-sm mt-1">{attendanceWindowStatus.message}</p>
+              </div>
+            )}
+
+            {attendanceEnabled && attendanceWindowStatus.canMark && !classHasScheduleOnSelectedDate && (
               <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-800">
                 <p className="text-sm font-semibold">No class scheduled on this date.</p>
                 <p className="text-sm mt-1">
@@ -502,7 +581,7 @@ function TeacherAttendance() {
               </div>
             )}
 
-            {attendanceEnabled && classHasScheduleOnSelectedDate ? (
+            {attendanceEnabled && attendanceWindowStatus.canMark && classHasScheduleOnSelectedDate ? (
               <>
             {/* Attendance Summary */}
             <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">

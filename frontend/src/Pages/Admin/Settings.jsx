@@ -1,5 +1,6 @@
 import '../../App.css'
 import { useState, useEffect } from "react";
+import Swal from 'sweetalert2';
 import Sidebar from "../../Components/Admin/Sidebar.jsx";
 import settingsService from "../../service/settingsService";
 import authService from "../../service/authService";
@@ -169,12 +170,86 @@ function Settings() {
         const data = response.data || response;
         
         // Map API response to local state
-        if (data.general) setGeneralSettings(prev => ({...prev, ...data.general}));
-        if (data.academic) setAcademicSettings(prev => ({...prev, ...data.academic}));
-        if (data.users) setUserRoleSettings(prev => ({...prev, ...data.users}));
-        if (data.enrollment) setEnrollmentRules(prev => ({...prev, ...data.enrollment}));
-        if (data.grading) setGradingSettings(prev => ({...prev, ...data.grading}));
-        if (data.security) setSystemSecurity(prev => ({...prev, ...data.security}));
+        if (data.general) {
+          setGeneralSettings(prev => ({
+            ...prev,
+            schoolName: data.general.school_name ?? prev.schoolName,
+            schoolLogo: data.general.school_logo ?? prev.schoolLogo,
+            address: data.general.address ?? prev.address,
+            phone: data.general.phone ?? prev.phone,
+            email: data.general.email ?? prev.email,
+            timezone: data.general.timezone ?? prev.timezone,
+            dateFormat: data.general.date_format ?? prev.dateFormat,
+            language: data.general.language ?? prev.language,
+          }));
+        }
+
+        if (data.academic) {
+          setAcademicSettings(prev => ({
+            ...prev,
+            defaultAcademicYear: data.academic.default_academic_year ?? prev.defaultAcademicYear,
+            semesterType: data.academic.semester_type ?? prev.semesterType,
+            numberOfYearLevels: data.academic.number_of_year_levels ?? prev.numberOfYearLevels,
+            sectionNameFormat: data.academic.section_name_format ?? prev.sectionNameFormat,
+            maxStudentsPerSection: data.academic.max_students_per_section ?? prev.maxStudentsPerSection,
+            enablePrerequisites: data.academic.enable_prerequisites ?? prev.enablePrerequisites,
+            allowCrossEnrollment: data.academic.allow_cross_enrollment ?? prev.allowCrossEnrollment,
+          }));
+        }
+
+        if (data.user_roles) {
+          setUserRoleSettings(prev => ({
+            ...prev,
+            enableAdmin: data.user_roles.enable_admin ?? prev.enableAdmin,
+            enableTeacher: data.user_roles.enable_teacher ?? prev.enableTeacher,
+            enableStudent: data.user_roles.enable_student ?? prev.enableStudent,
+            enableRegistrar: data.user_roles.enable_registrar ?? prev.enableRegistrar,
+            passwordMinLength: data.user_roles.password_min_length ?? prev.passwordMinLength,
+            requireSpecialChars: data.user_roles.require_special_chars ?? prev.requireSpecialChars,
+            sessionTimeout: data.user_roles.session_timeout ?? prev.sessionTimeout,
+            maxLoginAttempts: data.user_roles.max_login_attempts ?? prev.maxLoginAttempts,
+          }));
+        }
+
+        if (data.enrollment) {
+          setEnrollmentRules(prev => ({
+            ...prev,
+            enrollmentOpen: data.enrollment.enrollment_open ?? prev.enrollmentOpen,
+            allowLateEnrollment: data.enrollment.allow_late_enrollment ?? prev.allowLateEnrollment,
+            lateEnrollmentDeadline: data.enrollment.late_enrollment_deadline ?? prev.lateEnrollmentDeadline,
+            maxUnitsPerSemester: data.enrollment.max_units_per_semester ?? prev.maxUnitsPerSemester,
+            enforcePrerequisites: data.enrollment.enforce_prerequisites ?? prev.enforcePrerequisites,
+            autoCloseFullSections: data.enrollment.auto_close_full_sections ?? prev.autoCloseFullSections,
+            requireApproval: data.enrollment.require_approval ?? prev.requireApproval,
+          }));
+        }
+
+        if (data.grading) {
+          setGradingSettings(prev => ({
+            ...prev,
+            gradingScale: data.grading.grading_scale ?? prev.gradingScale,
+            passingGrade: data.grading.passing_grade ?? prev.passingGrade,
+            decimalPlaces: data.grading.decimal_places ?? prev.decimalPlaces,
+            gpaComputationMethod: data.grading.gpa_computation_method ?? prev.gpaComputationMethod,
+            gradeLockAfterSubmission: data.grading.grade_lock_after_submission ?? prev.gradeLockAfterSubmission,
+            allowGradeRevision: data.grading.allow_grade_revision ?? prev.allowGradeRevision,
+            includeIncompleteGrades: data.grading.include_incomplete_grades ?? prev.includeIncompleteGrades,
+          }));
+        }
+
+        if (data.system) {
+          setSystemSecurity(prev => ({
+            ...prev,
+            maintenanceMode: data.system.maintenance_mode ?? prev.maintenanceMode,
+            enableAuditLogs: data.system.enable_audit_logs ?? prev.enableAuditLogs,
+            enableTwoFactor: data.system.enable_two_factor ?? prev.enableTwoFactor,
+            ipRestrictions: data.system.ip_restrictions ?? prev.ipRestrictions,
+            allowedIPs: data.system.allowed_ips ?? prev.allowedIPs,
+            encryptionEnabled: data.system.encryption_enabled ?? prev.encryptionEnabled,
+            apiRateLimit: data.system.api_rate_limit ?? prev.apiRateLimit,
+          }));
+        }
+
         if (data.backup) setBackupLogs(prev => ({...prev, ...data.backup}));
       } catch (err) {
         console.error('Failed to load settings:', err);
@@ -253,11 +328,26 @@ function Settings() {
       setSaveStatus('success');
       setSaveMessage('Profile and photo saved successfully to database.');
       setTimeout(() => setSaveStatus(null), 3000);
+      await Swal.fire({
+        title: 'Profile Saved',
+        text: 'Profile and photo were saved successfully.',
+        icon: 'success',
+        confirmButtonText: 'OK',
+        confirmButtonColor: '#2563eb',
+      });
     } catch (err) {
       console.error('Failed to update profile:', err);
-      setError(err.response?.data?.message || 'Failed to update profile');
+      const message = err.response?.data?.message || 'Failed to update profile';
+      setError(message);
       setSaveStatus(null);
       setSaveMessage('');
+      await Swal.fire({
+        title: 'Save Failed',
+        text: message,
+        icon: 'error',
+        confirmButtonText: 'OK',
+        confirmButtonColor: '#dc2626',
+      });
     }
   };
 
@@ -265,6 +355,13 @@ function Settings() {
     setError(null);
     if (passwordForm.password !== passwordForm.password_confirmation) {
       setError('New password and confirmation do not match');
+      await Swal.fire({
+        title: 'Password Mismatch',
+        text: 'New password and confirmation do not match.',
+        icon: 'warning',
+        confirmButtonText: 'OK',
+        confirmButtonColor: '#f59e0b',
+      });
       return;
     }
 
@@ -283,10 +380,25 @@ function Settings() {
       setSaveStatus('success');
       setSaveMessage('Password updated successfully.');
       setTimeout(() => setSaveStatus(null), 3000);
+      await Swal.fire({
+        title: 'Password Updated',
+        text: 'Your password has been updated successfully.',
+        icon: 'success',
+        confirmButtonText: 'OK',
+        confirmButtonColor: '#2563eb',
+      });
     } catch (err) {
       console.error('Failed to update password:', err);
-      setError(err.response?.data?.message || 'Failed to update password');
+      const message = err.response?.data?.message || 'Failed to update password';
+      setError(message);
       setSaveMessage('');
+      await Swal.fire({
+        title: 'Password Update Failed',
+        text: message,
+        icon: 'error',
+        confirmButtonText: 'OK',
+        confirmButtonColor: '#dc2626',
+      });
     } finally {
       setPasswordLoading(false);
     }
@@ -300,47 +412,132 @@ function Settings() {
     
     try {
       let settingsData = {};
-      switch(section) {
+      switch (section) {
         case 'general':
-          settingsData = { general: generalSettings };
+          settingsData = {
+            general: {
+              school_name: generalSettings.schoolName,
+              address: generalSettings.address,
+              phone: generalSettings.phone,
+              email: generalSettings.email,
+              timezone: generalSettings.timezone,
+              date_format: generalSettings.dateFormat,
+              language: generalSettings.language,
+            },
+          };
           break;
         case 'academic':
-          settingsData = { academic: academicSettings };
+          settingsData = {
+            academic: {
+              default_academic_year: academicSettings.defaultAcademicYear,
+              semester_type: academicSettings.semesterType,
+              number_of_year_levels: academicSettings.numberOfYearLevels,
+              section_name_format: academicSettings.sectionNameFormat,
+              max_students_per_section: academicSettings.maxStudentsPerSection,
+              enable_prerequisites: academicSettings.enablePrerequisites,
+              allow_cross_enrollment: academicSettings.allowCrossEnrollment,
+            },
+          };
           break;
         case 'users':
-          settingsData = { users: userRoleSettings };
+          settingsData = {
+            users: {
+              enable_admin: userRoleSettings.enableAdmin,
+              enable_teacher: userRoleSettings.enableTeacher,
+              enable_student: userRoleSettings.enableStudent,
+              enable_registrar: userRoleSettings.enableRegistrar,
+              password_min_length: userRoleSettings.passwordMinLength,
+              require_special_chars: userRoleSettings.requireSpecialChars,
+              session_timeout: userRoleSettings.sessionTimeout,
+              max_login_attempts: userRoleSettings.maxLoginAttempts,
+            },
+          };
           break;
         case 'enrollment':
-          settingsData = { enrollment: enrollmentRules };
+          settingsData = {
+            enrollment: {
+              enrollment_open: enrollmentRules.enrollmentOpen,
+              allow_late_enrollment: enrollmentRules.allowLateEnrollment,
+              late_enrollment_deadline: enrollmentRules.lateEnrollmentDeadline,
+              max_units_per_semester: enrollmentRules.maxUnitsPerSemester,
+              enforce_prerequisites: enrollmentRules.enforcePrerequisites,
+              auto_close_full_sections: enrollmentRules.autoCloseFullSections,
+              require_approval: enrollmentRules.requireApproval,
+            },
+          };
           break;
         case 'grading':
-          settingsData = { grading: gradingSettings };
+          settingsData = {
+            grading: {
+              grading_scale: gradingSettings.gradingScale,
+              passing_grade: gradingSettings.passingGrade,
+              decimal_places: gradingSettings.decimalPlaces,
+              gpa_computation_method: gradingSettings.gpaComputationMethod,
+              grade_lock_after_submission: gradingSettings.gradeLockAfterSubmission,
+              allow_grade_revision: gradingSettings.allowGradeRevision,
+              include_incomplete_grades: gradingSettings.includeIncompleteGrades,
+            },
+          };
           break;
         case 'security':
-          settingsData = { security: systemSecurity };
+          settingsData = {
+            security: {
+              maintenance_mode: systemSecurity.maintenanceMode,
+              enable_audit_logs: systemSecurity.enableAuditLogs,
+              enable_two_factor: systemSecurity.enableTwoFactor,
+              ip_restrictions: systemSecurity.ipRestrictions,
+              allowed_ips: systemSecurity.allowedIPs,
+              encryption_enabled: systemSecurity.encryptionEnabled,
+              api_rate_limit: systemSecurity.apiRateLimit,
+            },
+          };
           break;
         case 'backup':
-          settingsData = { backup: backupLogs };
-          break;
+          await Swal.fire({
+            title: 'Not Available',
+            text: 'Backup settings are not connected to a backend endpoint yet.',
+            icon: 'info',
+            confirmButtonText: 'OK',
+            confirmButtonColor: '#2563eb',
+          });
+          setSaveStatus(null);
+          setSaveMessage('');
+          return;
         default:
-          break;
+          setSaveStatus(null);
+          setSaveMessage('');
+          return;
       }
-      
+
       await settingsService.update(section, settingsData);
       setSaveStatus('success');
       setSaveMessage('Settings saved successfully.');
       setTimeout(() => setSaveStatus(null), 3000);
+      await Swal.fire({
+        title: 'Settings Saved',
+        text: 'Settings were saved successfully to the database.',
+        icon: 'success',
+        confirmButtonText: 'OK',
+        confirmButtonColor: '#2563eb',
+      });
     } catch (err) {
       console.error('Failed to save settings:', err);
-      setError('Failed to save settings. Please try again.');
+      const message = err?.response?.data?.message || 'Failed to save settings. Please try again.';
+      setError(message);
       setSaveStatus(null);
       setSaveMessage('');
+      await Swal.fire({
+        title: 'Save Failed',
+        text: message,
+        icon: 'error',
+        confirmButtonText: 'OK',
+        confirmButtonColor: '#dc2626',
+      });
     }
   };
 
   // Settings Tabs
   const tabs = [
-    { id: 'profile', label: 'Profile', icon: User },
     { id: 'general', label: 'General', icon: SettingsIcon },
     { id: 'academic', label: 'Academic', icon: BookOpen },
     { id: 'users', label: 'Users & Roles', icon: Users },

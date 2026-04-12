@@ -1,45 +1,88 @@
 import '../../App.css';
-import { useState, useMemo, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useMemo, useState, useEffect, useCallback, Fragment } from 'react';
 import Sidebar from '../../Components/Teacher/Sidebar.jsx';
-import {
-  Calendar,
-  ChevronLeft,
-  ChevronRight,
-  Clock,
-  MapPin,
-  Bell,
-  Users,
-  AlertCircle,
-  X,
-  Loader2,
-} from 'lucide-react';
+import { Calendar, Clock, MapPin, Bell, Users, Loader2, AlertCircle } from 'lucide-react';
 import scheduleService from '../../service/scheduleService';
 import authService from '../../service/authService';
 
-// No fallback data - use real data only
+const WEEK_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function getDayIndex(dayValue) {
+  const normalizedDay = String(dayValue || '').trim().toLowerCase();
+  const index = WEEK_DAYS.findIndex((day) => day.toLowerCase() === normalizedDay);
+  return index >= 0 ? index : 0;
+}
+
+function parseScheduleTimeToMinutes(timePart) {
+  const trimmed = (timePart || '').trim();
+  if (!trimmed) return null;
+
+  const match = trimmed.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*(AM|PM))?$/i);
+  if (!match) return null;
+
+  let hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const meridiem = match[4] ? match[4].toUpperCase() : null;
+
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
+
+  if (meridiem) {
+    if (meridiem === 'PM' && hours !== 12) hours += 12;
+    if (meridiem === 'AM' && hours === 12) hours = 0;
+  }
+
+  return hours * 60 + minutes;
+}
+
+function groupByDay(entries) {
+  const map = WEEK_DAYS.reduce((acc, day) => ({ ...acc, [day]: [] }), {});
+
+  entries.forEach((entry) => {
+    if (!map[entry.day]) map[entry.day] = [];
+    map[entry.day].push(entry);
+  });
+
+  return WEEK_DAYS.map((day) => ({ day, classes: map[day] || [] }));
+}
+
+function formatTimeLabel(timeValue) {
+  if (!timeValue) return 'TBA';
+
+  const text = String(timeValue).trim();
+  const match = text.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*(AM|PM))?$/i);
+  if (!match) return text;
+
+  let hours = Number(match[1]);
+  const minutes = match[2];
+  const meridiem = match[4] ? match[4].toUpperCase() : null;
+
+  if (meridiem) {
+    if (meridiem === 'PM' && hours !== 12) hours += 12;
+    if (meridiem === 'AM' && hours === 12) hours = 0;
+  }
+
+  const displayMeridiem = hours >= 12 ? 'PM' : 'AM';
+  const displayHour = hours === 0 ? 12 : hours > 12 ? hours - 12 : hours;
+  return `${displayHour}:${minutes} ${displayMeridiem}`;
+}
 
 function TeacherSchedule() {
   const [activeItem, setActiveItem] = useState('Schedule');
-  const [viewMode, setViewMode] = useState('week'); // 'week' or 'day'
-  const [selectedDay, setSelectedDay] = useState(0);
-  const [expandedClass, setExpandedClass] = useState(null);
+  const [scheduleEntries, setScheduleEntries] = useState([]);
   const [reminders, setReminders] = useState({});
-  const [showReminderModal, setShowReminderModal] = useState(false);
-  const [reminderTime, setReminderTime] = useState('15'); // minutes before
-  const [scheduleData, setScheduleData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const navigate = useNavigate();
+  const [currentTime, setCurrentTime] = useState(() => new Date());
 
   const fetchSchedule = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const user = authService.getCurrentUser();
-      const response = await scheduleService.getAll(
-        user?.teacher_id ? { teacher_id: user.teacher_id, per_page: 1000 } : { per_page: 1000 }
-      );
+      const response = user?.teacher_id
+        ? await scheduleService.getByTeacher(user.teacher_id, { per_page: 1000 })
+        : await scheduleService.getAll({ per_page: 1000 });
+
       const payload = response?.data ?? response;
       const schedules = Array.isArray(payload) ? payload : (Array.isArray(payload?.data) ? payload.data : []);
 
@@ -48,44 +91,67 @@ function TeacherSchedule() {
         if (typeof value === 'string' || typeof value === 'number') return String(value);
         return fallback;
       };
-      
-      // Group schedules by day
-      const dayMap = {};
-      const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-      
-      schedules.forEach(schedule => {
-        const dayName = schedule.day || schedule.day_of_week || 'Monday';
-        if (!dayMap[dayName]) {
-          dayMap[dayName] = {
-            day: dayName,
-            date: schedule.date || new Date().toISOString().split('T')[0],
-            classes: []
-          };
-        }
-        dayMap[dayName].classes.push({
-          id: schedule.id,
-          subject: asText(schedule.subject?.subject_name) || asText(schedule.subject?.name) || asText(schedule.class?.subject?.subject_name) || asText(schedule.class?.subject?.name) || asText(schedule.subject_name) || 'Unknown',
-          code: asText(schedule.subject?.subject_code) || asText(schedule.subject?.code) || asText(schedule.class?.subject?.subject_code) || asText(schedule.class?.subject?.code) || asText(schedule.subject_code) || 'N/A',
-          section: asText(schedule.section?.section_code) || asText(schedule.class?.section?.section_code) || asText(schedule.section?.name) || asText(schedule.class?.section?.name) || `Section ${asText(schedule.section, 'A')}`,
-          time: asText(schedule.time_slot) || `${asText(schedule.time_start, '09:00')} - ${asText(schedule.time_end, '10:30')}`,
-          room: asText(schedule.room) || asText(schedule.room_number) || 'TBA',
-          building: asText(schedule.building) || 'Main Building',
-          students: Number(schedule.students_count ?? schedule.class?.enrolled_students_count ?? schedule.class?.enrollments_count ?? schedule.class?.students_count ?? 0),
-          reminders: false
-        });
+
+      const normalizeDay = (dayValue) => {
+        const normalized = asText(dayValue, '').trim().toLowerCase();
+        const dayMap = {
+          sunday: 'Sunday',
+          monday: 'Monday',
+          tuesday: 'Tuesday',
+          wednesday: 'Wednesday',
+          thursday: 'Thursday',
+          friday: 'Friday',
+          saturday: 'Saturday',
+        };
+        return dayMap[normalized] || 'Monday';
+      };
+
+      const mappedEntries = schedules.map((schedule, index) => {
+        const classRecord = schedule.class || {};
+        const startTimeRaw = schedule.time_start || schedule.start_time;
+        const endTimeRaw = schedule.time_end || schedule.end_time;
+        const startTime = formatTimeLabel(startTimeRaw);
+        const endTime = formatTimeLabel(endTimeRaw);
+
+        return {
+          id: schedule.id || `${index}`,
+          classId: schedule.class_id || classRecord.id || null,
+          day: normalizeDay(schedule.day_of_week || schedule.day),
+          startMinutes: parseScheduleTimeToMinutes(startTimeRaw),
+          endMinutes: parseScheduleTimeToMinutes(endTimeRaw),
+          subject: asText(classRecord.subject?.subject_name)
+            || asText(classRecord.subject?.name)
+            || asText(schedule.subject?.subject_name)
+            || asText(schedule.subject_name)
+            || 'Unknown Subject',
+          code: asText(classRecord.subject?.subject_code)
+            || asText(classRecord.subject?.code)
+            || asText(schedule.subject?.subject_code)
+            || asText(schedule.subject_code)
+            || 'N/A',
+          section: asText(classRecord.section?.section_code)
+            || asText(classRecord.section?.name)
+            || asText(schedule.section?.section_code)
+            || asText(schedule.section?.name)
+            || 'Section N/A',
+          time: `${startTime} - ${endTime}`,
+          room: asText(schedule.room_number || schedule.room, 'TBA'),
+          building: asText(schedule.building, ''),
+          students: Number(
+            schedule.students_count
+            ?? classRecord.enrolled_students_count
+            ?? classRecord.enrollments_count
+            ?? classRecord.students_count
+            ?? 0,
+          ),
+        };
       });
-      
-      // Convert to array sorted by day
-      const orderedDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-      const result = orderedDays
-        .filter(day => dayMap[day])
-        .map(day => dayMap[day]);
-      
-      setScheduleData(result.length > 0 ? result : []);
+
+      setScheduleEntries(mappedEntries);
     } catch (err) {
       console.error('Failed to fetch schedule:', err);
       setError('Failed to load schedule');
-      setScheduleData([]);
+      setScheduleEntries([]);
     } finally {
       setLoading(false);
     }
@@ -95,361 +161,327 @@ function TeacherSchedule() {
     fetchSchedule();
   }, [fetchSchedule]);
 
-  // Get current week
-  const currentDate = new Date();
-  const weekStart = new Date(currentDate);
-  weekStart.setDate(weekStart.getDate() - weekStart.getDay() + 1);
+  useEffect(() => {
+    const timerId = window.setInterval(() => {
+      setCurrentTime(new Date());
+    }, 30000);
 
-  const weekDays = scheduleData.map((day, idx) => ({
-    ...day,
-    weekDate: new Date(weekStart.getTime() + idx * 24 * 60 * 60 * 1000),
-  }));
+    return () => window.clearInterval(timerId);
+  }, []);
 
-  const toggleReminder = (classId) => {
-    setReminders(prev => ({
+  const week = useMemo(() => groupByDay(scheduleEntries), [scheduleEntries]);
+
+  const uniqueClassMap = useMemo(() => {
+    const map = new Map();
+    scheduleEntries.forEach((entry) => {
+      const key = entry.classId || entry.id;
+      if (!map.has(key)) map.set(key, entry);
+    });
+    return map;
+  }, [scheduleEntries]);
+
+  const uniqueClasses = useMemo(() => Array.from(uniqueClassMap.values()), [uniqueClassMap]);
+  const classesThisWeek = uniqueClasses.length;
+  const remindersActive = Object.values(reminders).filter(Boolean).length;
+
+  const nextClass = useMemo(() => {
+    if (scheduleEntries.length === 0) {
+      return { subject: 'No classes', time: '-', day: '' };
+    }
+
+    const nowDay = currentTime.getDay();
+    const nowMinutes = currentTime.getHours() * 60 + currentTime.getMinutes();
+
+    const sortedEntries = [...scheduleEntries].sort((left, right) => {
+      const leftDay = getDayIndex(left.day);
+      const rightDay = getDayIndex(right.day);
+      if (leftDay !== rightDay) return leftDay - rightDay;
+      return (left.startMinutes ?? 0) - (right.startMinutes ?? 0);
+    });
+
+    const upcoming = sortedEntries.find((entry) => {
+      const entryDay = getDayIndex(entry.day);
+      if (entryDay < nowDay) return false;
+      if (entryDay > nowDay) return true;
+      if (entry.startMinutes === null || entry.startMinutes === undefined) return false;
+      return entry.startMinutes >= nowMinutes;
+    }) || sortedEntries[0];
+
+    return upcoming || { subject: 'No classes', time: '-', day: '' };
+  }, [currentTime, scheduleEntries]);
+
+  const timeSlots = useMemo(() => {
+    const slots = [];
+    const start = 7 * 60;
+    const end = 22 * 60;
+
+    for (let mins = start; mins <= end; mins += 30) {
+      const hours = Math.floor(mins / 60);
+      const minutes = mins % 60;
+      const suffix = hours >= 12 ? 'PM' : 'AM';
+      const displayHour = hours === 0 ? 12 : hours > 12 ? hours - 12 : hours;
+      slots.push({
+        label: `${displayHour}:${minutes.toString().padStart(2, '0')} ${suffix}`,
+        minutes: mins,
+      });
+    }
+
+    return slots;
+  }, []);
+
+  const getTimeRangeMinutes = (range) => {
+    const [startPart, endPart] = (range || '').split('-').map((s) => s.trim());
+    const startMinutes = parseScheduleTimeToMinutes(startPart);
+    const endMinutes = parseScheduleTimeToMinutes(endPart);
+
+    if (startMinutes === null) return null;
+
+    return {
+      start: startMinutes,
+      end: endMinutes !== null && endMinutes > startMinutes ? endMinutes : startMinutes + 30,
+    };
+  };
+
+  const toggleReminder = (classKey) => {
+    setReminders((prev) => ({
       ...prev,
-      [classId]: !prev[classId],
+      [classKey]: !prev[classKey],
     }));
   };
 
-  const allClasses = scheduleData.flatMap(day => day.classes);
-  const todayClasses = scheduleData[selectedDay]?.classes || [];
-
-  const todayCount = allClasses.length;
-  const weekClassCount = scheduleData.reduce((sum, day) => sum + day.classes.length, 0);
-  const totalStudents = new Set(allClasses.map(c => c.students)).size;
-
-  // Time slots for day view
-  const timeSlots = [
-    '8:00 AM',
-    '9:00 AM',
-    '10:00 AM',
-    '11:00 AM',
-    '12:00 PM',
-    '1:00 PM',
-    '2:00 PM',
-    '3:00 PM',
-    '4:00 PM',
-  ];
-
   if (loading) {
     return (
-      <div className="flex h-screen overflow-hidden bg-gray-50">
+      <div className="flex h-screen">
         <Sidebar activeItem={activeItem} setActiveItem={setActiveItem} />
-        <main className="flex-1 h-full flex items-center justify-center">
+        <div className="h-screen bg-gray-50 p-8 flex-1 flex items-center justify-center">
           <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
-        </main>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-gray-50">
+    <div className="flex h-screen">
       <Sidebar activeItem={activeItem} setActiveItem={setActiveItem} />
-      <main className="flex-1 h-full overflow-y-auto p-8">
-        <div className="flex flex-col gap-6">
-          <header className="flex flex-col gap-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h1 className="text-3xl font-bold text-gray-900">Schedule</h1>
-                <p className="text-sm text-gray-600">Your teaching timetable and class schedule</p>
-              </div>
-              <div className="flex items-center gap-3 bg-white border border-gray-200 rounded-lg p-1">
-                <button
-                  onClick={() => setViewMode('week')}
-                  className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                    viewMode === 'week'
-                      ? 'bg-blue-600 text-white'
-                      : 'text-gray-700 hover:bg-gray-100'
-                  }`}
-                >
-                  Week
-                </button>
-                <button
-                  onClick={() => setViewMode('day')}
-                  className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                    viewMode === 'day'
-                      ? 'bg-blue-600 text-white'
-                      : 'text-gray-700 hover:bg-gray-100'
-                  }`}
-                >
-                  Day
-                </button>
-              </div>
-            </div>
+      <div className="h-screen bg-gray-50 p-8 flex-1 overflow-y-auto">
+        <div className="flex items-center justify-between mb-8">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">Schedule</h1>
+            <p className="text-gray-600 mt-1">Class timetable generated from your enrolled sections.</p>
+          </div>
+        </div>
 
-            {error && (
-              <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2 text-red-700">
-                <AlertCircle className="w-5 h-5" />
-                {error}
-              </div>
-            )}
-          </header>
+        {error && (
+          <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2 text-red-700">
+            <AlertCircle className="w-5 h-5" />
+            {error}
+          </div>
+        )}
 
-          {/* KPI Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="bg-white border border-gray-200 rounded-xl p-4">
-              <div className="flex items-center gap-3 mb-2">
-                <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
-                  <Calendar className="w-5 h-5 text-blue-600" />
-                </div>
-                <p className="text-xs text-gray-500 uppercase tracking-wide">Classes This Week</p>
-              </div>
-              <p className="text-2xl font-bold text-gray-900">{weekClassCount}</p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+          <div className="bg-white p-5 rounded-lg border border-gray-200 shadow-sm flex items-center gap-4">
+            <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
+              <Calendar className="w-6 h-6 text-blue-600" />
             </div>
-            <div className="bg-white border border-gray-200 rounded-xl p-4">
-              <div className="flex items-center gap-3 mb-2">
-                <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
-                  <Users className="w-5 h-5 text-green-600" />
-                </div>
-                <p className="text-xs text-gray-500 uppercase tracking-wide">Total Students</p>
-              </div>
-              <p className="text-2xl font-bold text-gray-900">{totalStudents}</p>
-            </div>
-            <div className="bg-white border border-gray-200 rounded-xl p-4">
-              <div className="flex items-center gap-3 mb-2">
-                <div className="w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center">
-                  <Bell className="w-5 h-5 text-amber-600" />
-                </div>
-                <p className="text-xs text-gray-500 uppercase tracking-wide">Reminders Active</p>
-              </div>
-              <p className="text-2xl font-bold text-gray-900">{Object.values(reminders).filter(Boolean).length}</p>
+            <div>
+              <p className="text-sm text-gray-600">Classes This Week</p>
+              <p className="text-2xl font-bold text-gray-900">{classesThisWeek}</p>
             </div>
           </div>
-
-          {/* Week View */}
-          {viewMode === 'week' && (
-            <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-              <div className="overflow-x-auto">
-                <div className="grid grid-cols-7 min-w-full">
-                  {/* Time column */}
-                  <div className="bg-gray-50 border-r border-gray-200">
-                    <div className="p-4 font-semibold text-gray-900 text-sm border-b border-gray-200 h-20 flex items-center">
-                      Time
-                    </div>
-                  </div>
-
-                  {/* Days */}
-                  {weekDays.map((dayData, idx) => (
-                    <div key={idx} className="border-r border-gray-200 last:border-r-0">
-                      <div className="p-4 bg-linear-to-br from-blue-50 to-blue-100 border-b border-gray-200">
-                        <p className="font-semibold text-gray-900 text-sm">{dayData.day}</p>
-                        <p className="text-xs text-gray-600 mt-1">{dayData.date}</p>
-                      </div>
-                      <div className="divide-y divide-gray-200">
-                        {dayData.classes.map(classItem => (
-                          <div
-                            key={classItem.id}
-                            className="p-3 bg-blue-50 hover:bg-blue-100 transition-colors cursor-pointer min-h-24"
-                          >
-                            <p className="font-semibold text-sm text-gray-900">{classItem.code}</p>
-                            <p className="text-xs text-gray-600">{classItem.time}</p>
-                            <p className="text-xs text-blue-600 mt-1">{classItem.room}</p>
-                          </div>
-                        ))}
-                        {dayData.classes.length === 0 && (
-                          <div className="p-4 text-center text-gray-400 text-xs min-h-24 flex items-center justify-center">
-                            No classes
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+          <div className="bg-white p-5 rounded-lg border border-gray-200 shadow-sm flex items-center gap-4">
+            <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
+              <Bell className="w-6 h-6 text-green-600" />
             </div>
-          )}
-
-          {/* Day View */}
-          {viewMode === 'day' && (
-            <>
-              {/* Day Selector */}
-              <div className="flex items-center justify-between bg-white border border-gray-200 rounded-xl p-4">
-                <button className="text-gray-500 hover:text-gray-700">
-                  <ChevronLeft className="w-5 h-5" />
-                </button>
-                <div className="flex gap-2 overflow-x-auto">
-                  {weekDays.map((day, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => setSelectedDay(idx)}
-                      className={`px-4 py-2 rounded-lg whitespace-nowrap font-medium transition-colors ${
-                        selectedDay === idx
-                          ? 'bg-blue-600 text-white'
-                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                      }`}
-                    >
-                      <p className="text-sm font-semibold">{day.day}</p>
-                      <p className="text-xs">{day.date}</p>
-                    </button>
-                  ))}
-                </div>
-                <button className="text-gray-500 hover:text-gray-700">
-                  <ChevronRight className="w-5 h-5" />
-                </button>
-              </div>
-
-              {/* Day Timeline */}
-              <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-                <div className="divide-y divide-gray-200">
-                  {timeSlots.map((slot, slotIdx) => {
-                    const slotClasses = todayClasses.filter(cls => cls.time.includes(slot.split(' ')[0]));
-                    return (
-                      <div key={slotIdx} className="flex">
-                        <div className="w-24 bg-gray-50 border-r border-gray-200 p-3 font-medium text-sm text-gray-600 shrink-0">
-                          {slot}
-                        </div>
-                        <div className="flex-1 p-3">
-                          {slotClasses.length > 0 ? (
-                            <div className="space-y-2">
-                              {slotClasses.map(classItem => (
-                                <div
-                                  key={classItem.id}
-                                  onClick={() => setExpandedClass(expandedClass?.id === classItem.id ? null : classItem)}
-                                  className="bg-linear-to-r from-blue-50 to-blue-100 border border-blue-200 rounded-lg p-4 hover:shadow-md transition-all cursor-pointer"
-                                >
-                                  <div className="flex items-start justify-between mb-2">
-                                    <div>
-                                      <h3 className="font-semibold text-gray-900">{classItem.subject}</h3>
-                                      <p className="text-sm text-gray-600">{classItem.code} • {classItem.section}</p>
-                                    </div>
-                                    <div className="text-right">
-                                      <p className="text-sm font-medium text-gray-900">{classItem.time}</p>
-                                    </div>
-                                  </div>
-
-                                  <div className="flex items-center gap-4 mb-3">
-                                    <div className="flex items-center gap-2 text-sm text-gray-700">
-                                      <MapPin className="w-4 h-4" />
-                                      {classItem.room} • {classItem.building}
-                                    </div>
-                                    <div className="flex items-center gap-2 text-sm text-gray-700">
-                                      <Users className="w-4 h-4" />
-                                      {classItem.students} students
-                                    </div>
-                                  </div>
-
-                                  {expandedClass?.id === classItem.id && (
-                                    <div className="border-t border-blue-200 pt-3 mt-3 space-y-3">
-                                      <div className="space-y-2">
-                                        <p className="text-sm font-medium text-gray-900">Room Details</p>
-                                        <div className="bg-white rounded p-2 text-sm text-gray-700 space-y-1">
-                                          <p>📍 {classItem.building}</p>
-                                          <p>🚪 Room {classItem.room.split(' ')[1]}</p>
-                                          <p>👥 Capacity: {classItem.students} students enrolled</p>
-                                        </div>
-                                      </div>
-
-                                      <div className="flex items-center gap-2">
-                                        <button
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            toggleReminder(classItem.id);
-                                          }}
-                                          className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
-                                            reminders[classItem.id]
-                                              ? 'bg-amber-100 text-amber-700 border border-amber-200'
-                                              : 'bg-gray-100 text-gray-700 border border-gray-200 hover:bg-gray-200'
-                                          }`}
-                                        >
-                                          <Bell className="w-4 h-4" />
-                                          <span className="text-sm font-medium">
-                                            {reminders[classItem.id] ? 'Reminder On' : 'Add Reminder'}
-                                          </span>
-                                        </button>
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <p className="text-gray-400 text-sm">No classes scheduled</p>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </>
-          )}
-
-          {/* Reminders Section */}
-          <div className="bg-white border border-gray-200 rounded-xl p-6">
-            <div className="flex items-center gap-2 mb-4">
-              <Bell className="w-5 h-5 text-amber-600" />
-              <h2 className="text-lg font-semibold text-gray-900">Class Reminders</h2>
+            <div>
+              <p className="text-sm text-gray-600">Reminders Active</p>
+              <p className="text-2xl font-bold text-gray-900">{remindersActive}</p>
             </div>
-
-            {Object.keys(reminders).length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                <AlertCircle className="w-8 h-8 mx-auto mb-2 text-gray-400" />
-                <p>No reminders set. Click the reminder button on any class to add one.</p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {allClasses.map(classItem => (
-                  reminders[classItem.id] && (
-                    <div key={classItem.id} className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-lg p-4">
-                      <div>
-                        <p className="font-medium text-gray-900">{classItem.code} • {classItem.section}</p>
-                        <p className="text-sm text-gray-600">{classItem.time} • {classItem.room}</p>
-                      </div>
-                      <button
-                        onClick={() => toggleReminder(classItem.id)}
-                        className="text-amber-600 hover:text-amber-700"
-                      >
-                        <X className="w-5 h-5" />
-                      </button>
-                    </div>
-                  )
-                ))}
-              </div>
-            )}
           </div>
-
-          {/* Upcoming Classes */}
-          <div className="bg-white border border-gray-200 rounded-xl p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">All Classes This Week</h2>
-            <div className="space-y-3">
-              {scheduleData.map(day => (
-                <div key={`${day.day}-${day.date || 'no-date'}`}>
-                  <p className="text-sm font-semibold text-gray-700 mb-2">{day.day}</p>
-                  <div className="space-y-2 ml-4">
-                    {day.classes.map(classItem => (
-                      <div key={classItem.id} className="flex items-center justify-between bg-gray-50 p-3 rounded-lg">
-                        <div>
-                          <p className="font-medium text-gray-900">{classItem.code} - {classItem.subject}</p>
-                          <div className="flex items-center gap-4 text-sm text-gray-600 mt-1">
-                            <span className="flex items-center gap-1">
-                              <Clock className="w-3 h-3" />
-                              {classItem.time}
-                            </span>
-                            <span className="flex items-center gap-1">
-                              <MapPin className="w-3 h-3" />
-                              {classItem.room}
-                            </span>
-                            <span className="flex items-center gap-1">
-                              <Users className="w-3 h-3" />
-                              {classItem.students} students
-                            </span>
-                          </div>
-                        </div>
-                        {reminders[classItem.id] && (
-                          <div className="text-amber-600">
-                            <Bell className="w-5 h-5" />
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
+          <div className="bg-white p-5 rounded-lg border border-gray-200 shadow-sm flex items-center gap-4">
+            <div className="w-12 h-12 bg-amber-100 rounded-lg flex items-center justify-center">
+              <Clock className="w-6 h-6 text-amber-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-600">Next Class</p>
+              <p className="text-base font-semibold text-gray-900 leading-tight">{nextClass.subject}</p>
+              {nextClass.day ? <p className="text-xs text-gray-500">{nextClass.day}</p> : null}
+              <p className="text-xs text-gray-600">{nextClass.time}</p>
             </div>
           </div>
         </div>
-      </main>
+
+        {classesThisWeek === 0 ? (
+          <div className="bg-white border border-gray-200 rounded-xl p-10 text-center">
+            <div className="mx-auto w-14 h-14 bg-blue-100 rounded-full flex items-center justify-center mb-4">
+              <Calendar className="w-7 h-7 text-blue-600" />
+            </div>
+            <h2 className="text-xl font-semibold text-gray-900">No schedules assigned yet</h2>
+            <p className="text-sm text-gray-600 mt-2">
+              Your class schedule is still being prepared. Please check back later or contact your adviser.
+            </p>
+          </div>
+        ) : (
+          <>
+            <div className="bg-white border border-gray-200 rounded-xl overflow-hidden hidden md:block">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-5 h-5 text-blue-600" />
+                  <h2 className="text-lg font-semibold text-gray-900">Weekly Schedule</h2>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <div className="w-full min-w-275">
+                  <div className="grid w-full" style={{ gridTemplateColumns: '110px repeat(7, minmax(130px, 1fr))' }}>
+                    <div className="bg-gray-100 border-r border-b border-gray-200 px-4 py-3 text-xs font-semibold text-gray-600 uppercase tracking-wide">Time</div>
+                    {week.map((day) => (
+                      <div
+                        key={day.day}
+                        className="bg-gray-100 border-r last:border-r-0 border-b border-gray-200 px-4 py-3 text-xs font-semibold text-gray-700 uppercase tracking-wide text-center"
+                      >
+                        {day.day}
+                      </div>
+                    ))}
+
+                    {timeSlots.map((slot, idx) => {
+                      const isAlt = idx % 2 === 0;
+
+                      return (
+                        <Fragment key={slot.label}>
+                          <div
+                            className={`border-b border-r border-gray-200 px-3 py-4 text-xs font-medium text-gray-600 ${
+                              isAlt ? 'bg-white' : 'bg-gray-50'
+                            }`}
+                          >
+                            {slot.label}
+                          </div>
+                          {week.map((day) => {
+                            const cellKey = `${day.day}-${slot.label}`;
+                            const classesAtSlot = day.classes.filter((cls) => {
+                              const range = getTimeRangeMinutes(cls.time);
+                              if (!range) return false;
+                              return slot.minutes >= range.start && slot.minutes < range.end;
+                            });
+
+                            const classAtSlotStart = day.classes.find((cls) => {
+                              const range = getTimeRangeMinutes(cls.time);
+                              if (!range) return false;
+                              return range.start === slot.minutes;
+                            });
+
+                            if (classesAtSlot.length === 0) {
+                              return (
+                                <div
+                                  key={cellKey}
+                                  className={`border-b border-r last:border-r-0 border-gray-200 px-3 py-3 relative ${
+                                    isAlt ? 'bg-white' : 'bg-gray-50'
+                                  } min-h-17.5`}
+                                >
+                                  <div className="h-full text-[11px] text-gray-300 text-center">-</div>
+                                </div>
+                              );
+                            }
+
+                            if (classAtSlotStart) {
+                              const range = getTimeRangeMinutes(classAtSlotStart.time);
+                              const durationMinutes = range ? (range.end - range.start) : 30;
+                              const rowCount = Math.ceil(durationMinutes / 30);
+
+                              return (
+                                <div
+                                  key={`${day.day}-${slot.label}-${classAtSlotStart.id}`}
+                                  className="border-r last:border-r-0 border-gray-200 px-3 py-3 relative"
+                                  style={{ gridRow: `span ${rowCount}` }}
+                                >
+                                  <div className="rounded-md border border-blue-200 bg-blue-50 shadow-[0_1px_2px_rgba(0,0,0,0.04)] p-3 h-full flex flex-col">
+                                    <p className="text-sm font-semibold text-gray-900 leading-snug">{classAtSlotStart.subject}</p>
+                                    <p className="text-xs text-gray-600">{classAtSlotStart.code} | {classAtSlotStart.section}</p>
+                                    <div className="flex items-center gap-2 text-[11px] text-gray-600 mt-2">
+                                      <Clock className="w-3 h-3" />
+                                      <span>{classAtSlotStart.time}</span>
+                                    </div>
+                                    <div className="flex items-center gap-2 text-[11px] text-gray-600 mt-1">
+                                      <MapPin className="w-3 h-3" />
+                                      <span>{classAtSlotStart.building ? `${classAtSlotStart.room}, ${classAtSlotStart.building}` : classAtSlotStart.room}</span>
+                                    </div>
+                                    <div className="flex items-center gap-2 text-[11px] text-gray-600 mt-1">
+                                      <Users className="w-3 h-3" />
+                                      <span>{classAtSlotStart.students} students</span>
+                                    </div>
+                                    <button
+                                      onClick={() => toggleReminder(classAtSlotStart.id)}
+                                      className={`mt-auto inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-colors ${
+                                        reminders[classAtSlotStart.id]
+                                          ? 'bg-gray-900 text-white border-gray-900'
+                                          : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100'
+                                      }`}
+                                    >
+                                      <Bell className="w-3 h-3" />
+                                      {reminders[classAtSlotStart.id] ? 'Reminder On' : 'Set Reminder'}
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            }
+
+                            return null;
+                          })}
+                        </Fragment>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="md:hidden space-y-4">
+              {week.map((day) => (
+                <div key={day.day} className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-sm font-semibold text-gray-900">{day.day}</p>
+                    <span className="text-xs text-gray-500">{day.classes.length} class{day.classes.length === 1 ? '' : 'es'}</span>
+                  </div>
+                  {day.classes.length === 0 ? (
+                    <p className="text-xs text-gray-400">No classes</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {day.classes.map((cls) => (
+                        <div key={`${day.day}-${cls.id}-${cls.code}`} className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+                          <p className="text-sm font-semibold text-gray-900">{cls.subject}</p>
+                          <p className="text-xs text-gray-600">{cls.code} | {cls.section}</p>
+                          <div className="flex items-center gap-2 text-[11px] text-gray-600 mt-2">
+                            <Clock className="w-3 h-3" />
+                            <span>{cls.time}</span>
+                          </div>
+                          <div className="flex items-center gap-2 text-[11px] text-gray-600 mt-1">
+                            <MapPin className="w-3 h-3" />
+                            <span>{cls.building ? `${cls.room}, ${cls.building}` : cls.room}</span>
+                          </div>
+                          <div className="flex items-center gap-2 text-[11px] text-gray-600 mt-1">
+                            <Users className="w-3 h-3" />
+                            <span>{cls.students} students</span>
+                          </div>
+                          <button
+                            onClick={() => toggleReminder(cls.id)}
+                            className={`mt-3 inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-colors ${
+                              reminders[cls.id]
+                                ? 'bg-gray-900 text-white border-gray-900'
+                                : 'bg-gray-100 text-gray-700 border-gray-200 hover:bg-gray-200'
+                            }`}
+                          >
+                            <Bell className="w-3 h-3" />
+                            {reminders[cls.id] ? 'Reminder On' : 'Set Reminder'}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

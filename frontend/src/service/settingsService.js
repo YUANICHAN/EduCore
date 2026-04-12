@@ -71,6 +71,33 @@ const settingsService = {
   },
 
   /**
+   * Update settings section using section key
+   * @param {string} section
+   * @param {Object} settingsData
+   * @returns {Promise}
+   */
+  update: async (section, settingsData) => {
+    const payload = settingsData?.[section] ?? settingsData;
+
+    switch (section) {
+      case 'general':
+        return settingsService.updateGeneral(payload);
+      case 'academic':
+        return settingsService.updateAcademic(payload);
+      case 'users':
+        return settingsService.updateUserRoles(payload);
+      case 'enrollment':
+        return settingsService.updateEnrollment(payload);
+      case 'grading':
+        return settingsService.updateGrading(payload);
+      case 'security':
+        return settingsService.updateSystem(payload);
+      default:
+        throw new Error(`Unsupported settings section: ${section}`);
+    }
+  },
+
+  /**
    * Upload school logo
    * @param {File} logoFile 
    * @returns {Promise}

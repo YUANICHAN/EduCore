@@ -120,6 +120,44 @@ class AuthController extends Controller
 
         $user->update($data);
 
+        // Keep linked role profile records in sync with core user profile fields.
+        $fullName = trim((string) ($data['name'] ?? $user->name ?? ''));
+        $nameParts = preg_split('/\s+/', $fullName, 2);
+        $firstName = $nameParts[0] ?? null;
+        $lastName = $nameParts[1] ?? null;
+
+        if ($user->teacher_id && $user->teacher) {
+            $teacherData = [];
+
+            if (!empty($firstName)) $teacherData['first_name'] = $firstName;
+            if (!empty($lastName)) $teacherData['last_name'] = $lastName;
+            if (array_key_exists('email', $data)) $teacherData['email'] = $data['email'];
+            if (array_key_exists('phone', $data)) $teacherData['phone'] = $data['phone'];
+            if (array_key_exists('address', $data)) $teacherData['address'] = $data['address'];
+            if (array_key_exists('avatar', $data)) $teacherData['profile_image'] = $data['avatar'];
+
+            if (!empty($teacherData)) {
+                $user->teacher->update($teacherData);
+            }
+        }
+
+        if ($user->student_id && $user->student) {
+            $studentData = [];
+
+            if (!empty($firstName)) $studentData['first_name'] = $firstName;
+            if (!empty($lastName)) $studentData['last_name'] = $lastName;
+            if (array_key_exists('email', $data)) $studentData['email'] = $data['email'];
+            if (array_key_exists('phone', $data)) $studentData['phone'] = $data['phone'];
+            if (array_key_exists('address', $data)) $studentData['address'] = $data['address'];
+            if (array_key_exists('avatar', $data)) $studentData['profile_image'] = $data['avatar'];
+
+            if (!empty($studentData)) {
+                $user->student->update($studentData);
+            }
+        }
+
+        $user->refresh();
+
         return response()->json([
             'message' => 'Profile updated successfully',
             'user' => $user,

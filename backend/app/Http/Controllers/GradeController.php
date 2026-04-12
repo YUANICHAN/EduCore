@@ -4,6 +4,9 @@ namespace App\Http\Controllers;
 
 use App\Models\Grade;
 use App\Models\Enrollment;
+use App\Models\Classes;
+use App\Models\GradingPeriod;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -73,6 +76,19 @@ class GradeController extends Controller
             'remarks' => 'nullable|string',
         ]);
 
+        $periodCheck = $this->checkGradeEncodingWindow(
+            $validated['class_id'],
+            $validated['grading_period'],
+            $validated['date_recorded']
+        );
+
+        if (!$periodCheck['allowed']) {
+            return response()->json([
+                'success' => false,
+                'message' => $periodCheck['message']
+            ], 422);
+        }
+
         // Verify enrollment matches student and class
         $enrollment = Enrollment::find($validated['enrollment_id']);
         if ($enrollment->student_id != $validated['student_id'] || 
@@ -133,6 +149,19 @@ class GradeController extends Controller
             'recorded_by' => 'exists:teachers,id',
             'remarks' => 'nullable|string',
         ]);
+
+        $periodCheck = $this->checkGradeEncodingWindow(
+            $validated['class_id'] ?? $grade->class_id,
+            $validated['grading_period'] ?? $grade->grading_period,
+            $validated['date_recorded'] ?? $grade->date_recorded
+        );
+
+        if (!$periodCheck['allowed']) {
+            return response()->json([
+                'success' => false,
+                'message' => $periodCheck['message']
+            ], 422);
+        }
 
         // Validate score <= max_score
         $score = $validated['score'] ?? $grade->score;
@@ -283,6 +312,17 @@ class GradeController extends Controller
         DB::beginTransaction();
         try {
             foreach ($validated['grades'] as $index => $gradeData) {
+                $periodCheck = $this->checkGradeEncodingWindow(
+                    $gradeData['class_id'],
+                    $gradeData['grading_period'],
+                    now()
+                );
+
+                if (!$periodCheck['allowed']) {
+                    $errors[] = "Grade at index {$index}: {$periodCheck['message']}";
+                    continue;
+                }
+
                 // Validate score <= max_score
                 if ($gradeData['score'] > $gradeData['max_score']) {
                     $errors[] = "Grade at index {$index}: Score cannot be greater than max score";
@@ -477,5 +517,95 @@ class GradeController extends Controller
                 'assignment' => $grades->where('component_type', 'assignment')->count(),
             ]
         ];
+    }
+
+    /**
+     * Check whether grade encoding is allowed for class academic year and grading period.
+     */
+    private function checkGradeEncodingWindow($classId, $gradingPeriodKey, $recordDate = null)
+    {
+        try {
+            $class = Classes::with('academicYear')->find($classId);
+
+            if (!$class) {
+                return [
+                    'allowed' => false,
+                    'message' => 'Class not found.'
+                ];
+            }
+
+            if (!$class->academicYear) {
+                return [
+                    'allowed' => false,
+                    'message' => 'Academic year not found for this class.'
+                ];
+            }
+
+            $targetDate = Carbon::parse($recordDate ?: now())->toDateString();
+            $startDate = Carbon::parse($class->academicYear->start_date)->toDateString();
+            $endDate = Carbon::parse($class->academicYear->end_date)->toDateString();
+
+            if ($targetDate < $startDate) {
+                return [
+                    'allowed' => false,
+                    'message' => 'Semester has not started yet for this class.'
+                ];
+            }
+
+            if ($targetDate > $endDate) {
+                return [
+                    'allowed' => false,
+                    'message' => 'Semester already ended for this class.'
+                ];
+            }
+
+            $openPeriod = GradingPeriod::where('academic_year_id', $class->academic_year_id)
+                ->where('status', 'open')
+                ->whereDate('start_date', '<=', $targetDate)
+                ->whereDate('end_date', '>=', $targetDate)
+                ->orderBy('period_number')
+                ->first();
+
+            if (!$openPeriod) {
+                return [
+                    'allowed' => false,
+                    'message' => 'No grading period is currently open for this date.'
+                ];
+            }
+
+            if (!$this->gradingPeriodMatches($gradingPeriodKey, $openPeriod)) {
+                return [
+                    'allowed' => false,
+                    'message' => 'Selected grading period is not open. Open period: ' . $openPeriod->period_name . '.'
+                ];
+            }
+
+            return [
+                'allowed' => true,
+                'message' => 'Grade encoding is allowed.'
+            ];
+        } catch (\Exception $e) {
+            return [
+                'allowed' => false,
+                'message' => 'Failed to validate grading period: ' . $e->getMessage()
+            ];
+        }
+    }
+
+    private function gradingPeriodMatches($gradingPeriodKey, GradingPeriod $openPeriod)
+    {
+        $key = strtolower((string) $gradingPeriodKey);
+        $periodName = strtolower((string) $openPeriod->period_name);
+        $numberMap = [
+            'prelim' => 1,
+            'midterm' => 2,
+            'finals' => 3,
+        ];
+
+        if (isset($numberMap[$key]) && (int) $openPeriod->period_number === $numberMap[$key]) {
+            return true;
+        }
+
+        return str_contains($periodName, $key);
     }
 }

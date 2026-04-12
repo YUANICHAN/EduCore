@@ -12,7 +12,11 @@ class AcademicYearController extends Controller
      */
     public function index(Request $request)
     {
-        $query = AcademicYear::withCount(['students', 'sections', 'classes']);
+        $query = AcademicYear::with([
+            'gradingPeriods' => function ($q) {
+                $q->orderBy('period_number', 'asc');
+            }
+        ])->withCount(['students', 'sections', 'classes']);
         
         // Search functionality
         if ($request->has('search')) {
@@ -63,7 +67,7 @@ class AcademicYearController extends Controller
         
         return response()->json([
             'success' => true,
-            'data' => $current->load(['sections', 'classes'])
+            'data' => $current->load(['sections', 'classes', 'gradingPeriods'])
         ]);
     }
 

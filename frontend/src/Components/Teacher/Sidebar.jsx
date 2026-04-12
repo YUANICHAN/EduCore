@@ -26,6 +26,78 @@ function Sidebar({ activeItem, setActiveItem }) {
     return saved !== null ? JSON.parse(saved) : true;
   });
   const [isMobile, setIsMobile] = useState(false);
+  const [teacherProfile, setTeacherProfile] = useState({
+    name: 'Teacher',
+    email: '',
+    avatar: '',
+  });
+
+  const resolveImageUrl = (imagePath) => {
+    if (!imagePath) return null;
+    if (/^https?:\/\//i.test(imagePath) || imagePath.startsWith('data:') || imagePath.startsWith('blob:')) {
+      return imagePath;
+    }
+
+    const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api';
+    const backendOrigin = apiBaseUrl.replace(/\/api\/?$/, '');
+
+    let normalizedPath = imagePath.startsWith('/') ? imagePath.slice(1) : imagePath;
+    if (!normalizedPath.startsWith('storage/') && normalizedPath.startsWith('avatars/')) {
+      normalizedPath = `storage/${normalizedPath}`;
+    }
+    if (normalizedPath.startsWith('public/')) {
+      normalizedPath = normalizedPath.replace(/^public\//, 'storage/');
+    }
+
+    return `${backendOrigin}/${normalizedPath}`;
+  };
+
+  const getInitials = (nameValue) => {
+    const words = String(nameValue || '').trim().split(/\s+/).filter(Boolean);
+    if (words.length === 0) return 'T';
+    if (words.length === 1) return words[0].charAt(0).toUpperCase();
+    return `${words[0].charAt(0)}${words[1].charAt(0)}`.toUpperCase();
+  };
+
+  const mapUserToSidebarProfile = (rawUser) => {
+    const user = rawUser || {};
+    const teacher = user.teacher || {};
+    const name = user.name
+      || `${teacher.first_name || ''} ${teacher.last_name || ''}`.trim()
+      || 'Teacher';
+
+    setTeacherProfile({
+      name,
+      email: user.email || teacher.email || '',
+      avatar: user.avatar || user.profile_image || teacher.profile_image || '',
+    });
+  };
+
+  useEffect(() => {
+    const loadSidebarProfile = async () => {
+      try {
+        const response = await authService.getProfile();
+        const user = response?.data || response || {};
+        mapUserToSidebarProfile(user);
+      } catch (error) {
+        const cachedUser = authService.getCurrentUser();
+        if (cachedUser) {
+          mapUserToSidebarProfile(cachedUser);
+        }
+      }
+    };
+
+    loadSidebarProfile();
+
+    const handleAuthUserUpdated = () => {
+      loadSidebarProfile();
+    };
+
+    window.addEventListener('auth-user-updated', handleAuthUserUpdated);
+    return () => {
+      window.removeEventListener('auth-user-updated', handleAuthUserUpdated);
+    };
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('teacherSidebarOpen', JSON.stringify(isOpen));
@@ -211,16 +283,24 @@ function Sidebar({ activeItem, setActiveItem }) {
 
         <div className={`${isOpen ? 'p-4' : 'p-3'} border-t border-white/10`}>
           <div className={`flex items-center ${isOpen ? 'space-x-3' : 'justify-center'}`}>
-            <div className="w-9 h-9 bg-white/10 rounded-full flex items-center justify-center">
-              <span className="text-sm font-medium text-white">MS</span>
+            <div className="w-9 h-9 bg-white/10 rounded-full overflow-hidden flex items-center justify-center">
+              {resolveImageUrl(teacherProfile.avatar) ? (
+                <img
+                  src={resolveImageUrl(teacherProfile.avatar)}
+                  alt={teacherProfile.name}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <span className="text-sm font-medium text-white">{getInitials(teacherProfile.name)}</span>
+              )}
             </div>
             {isOpen && (
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-white truncate">
-                  Maria Santos
+                  {teacherProfile.name}
                 </p>
                 <p className="text-xs text-white/60 truncate">
-                  Teacher
+                  {teacherProfile.email || 'No email'}
                 </p>
               </div>
             )}

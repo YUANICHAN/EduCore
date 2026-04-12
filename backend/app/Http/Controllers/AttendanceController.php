@@ -3,7 +3,10 @@
 namespace App\Http\Controllers;
 
 use App\Models\Attendance;
+use App\Models\Classes;
+use App\Models\AcademicYear;
 use Illuminate\Http\Request;
+use Carbon\Carbon;
 
 class AttendanceController extends Controller
 {
@@ -69,6 +72,15 @@ class AttendanceController extends Controller
             'remarks' => 'nullable|string',
             'recorded_by' => 'required|exists:users,id',
         ]);
+
+        // Check if semester/academic year is still active
+        $semesterCheck = $this->checkSemesterActive($validated['class_id'], $validated['date']);
+        if (!$semesterCheck['active']) {
+            return response()->json([
+                'success' => false,
+                'message' => $semesterCheck['message']
+            ], 422);
+        }
 
         // Check for duplicate attendance
         $exists = Attendance::where('class_id', $validated['class_id'])
@@ -158,6 +170,15 @@ class AttendanceController extends Controller
             'students.*.remarks' => 'nullable|string',
         ]);
 
+        // Check if semester/academic year is still active
+        $semesterCheck = $this->checkSemesterActive($validated['class_id'], $validated['date']);
+        if (!$semesterCheck['active']) {
+            return response()->json([
+                'success' => false,
+                'message' => $semesterCheck['message']
+            ], 422);
+        }
+
         $recorded = [];
         $errors = [];
         $recordedBy = $request->user()?->id ?? ($validated['recorded_by'] ?? null);
@@ -233,5 +254,64 @@ class AttendanceController extends Controller
             'attendance' => $attendance,
             'summary' => $summary
         ]);
+    }
+
+    /**
+     * Check if the semester/academic year is active for attendance recording
+     * Returns an array with 'active' (bool) and 'message' (string) keys
+     */
+    private function checkSemesterActive($classId, $attendanceDate)
+    {
+        try {
+            $class = Classes::with('academicYear')->find($classId);
+            
+            if (!$class) {
+                return [
+                    'active' => false,
+                    'message' => 'Class not found.'
+                ];
+            }
+            
+            $academicYear = $class->academicYear;
+            
+            if (!$academicYear) {
+                return [
+                    'active' => false,
+                    'message' => 'Academic year not found for this class.'
+                ];
+            }
+            
+            $attendanceDate = Carbon::parse($attendanceDate)->format('Y-m-d');
+            $startDate = $academicYear->start_date->format('Y-m-d');
+            $endDate = $academicYear->end_date->format('Y-m-d');
+            
+            // Check if attendance date is before semester start
+            if ($attendanceDate < $startDate) {
+                $formattedStart = Carbon::parse($startDate)->format('F j, Y');
+                return [
+                    'active' => false,
+                    'message' => "This semester has not started yet. Attendance can be recorded starting {$formattedStart}."
+                ];
+            }
+            
+            // Check if attendance date is after semester end
+            if ($attendanceDate > $endDate) {
+                $formattedEnd = Carbon::parse($endDate)->format('F j, Y');
+                return [
+                    'active' => false,
+                    'message' => "This semester ended on {$formattedEnd}. Attendance cannot be recorded."
+                ];
+            }
+            
+            return [
+                'active' => true,
+                'message' => 'Semester is active'
+            ];
+        } catch (\Exception $e) {
+            return [
+                'active' => false,
+                'message' => 'Error checking semester status: ' . $e->getMessage()
+            ];
+        }
     }
 }

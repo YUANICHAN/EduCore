@@ -111,6 +111,15 @@ const gradeService = {
     const response = await api.post('/grades/lock-period', periodData);
     return response.data;
   },
+
+  /**
+   * Get currently open grading period
+   * @returns {Promise}
+   */
+  getCurrentOpenPeriod: async () => {
+    const response = await api.get('/grading-periods/current-period');
+    return response.data;
+  },
 };
 
 export default gradeService;

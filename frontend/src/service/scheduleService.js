@@ -65,10 +65,11 @@ const scheduleService = {
   /**
    * Get schedules by teacher
    * @param {number} teacherId 
+   * @param {Object} params
    * @returns {Promise}
    */
-  getByTeacher: async (teacherId) => {
-    const response = await api.get(`/schedules/teacher/${teacherId}`);
+  getByTeacher: async (teacherId, params = {}) => {
+    const response = await api.get(`/schedules/teacher/${teacherId}`, { params });
     return response.data;
   },
 };
