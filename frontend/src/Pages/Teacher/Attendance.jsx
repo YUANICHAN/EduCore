@@ -5,6 +5,7 @@ import Sidebar from '../../Components/Teacher/Sidebar.jsx';
 import attendanceService from '../../service/attendanceService';
 import classService from '../../service/classService';
 import authService from '../../service/authService';
+import Swal from 'sweetalert2';
 import {
   UserCheck,
   UserX,
@@ -16,6 +17,7 @@ import {
   AlertCircle,
   CheckCircle2,
   XCircle,
+  ArrowLeft,
   Loader2,
   Save,
 } from 'lucide-react';
@@ -26,6 +28,7 @@ function TeacherAttendance() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [attendanceEnabled, setAttendanceEnabled] = useState(true);
 
   // Classes/subjects
   const [classes, setClasses] = useState([]);
@@ -34,6 +37,75 @@ function TeacherAttendance() {
 
   // Selected date for marking attendance
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+
+  const selectedDateDay = useMemo(() => {
+    if (!selectedDate) return '';
+    const parsed = new Date(`${selectedDate}T00:00:00`);
+    if (Number.isNaN(parsed.getTime())) return '';
+    return parsed.toLocaleDateString('en-US', { weekday: 'long' });
+  }, [selectedDate]);
+
+  const classHasScheduleOnSelectedDate = useMemo(() => {
+    if (!selectedClass || !selectedDateDay) return true;
+
+    const normalizeDayToken = (value) => {
+      const token = String(value || '').trim().toLowerCase();
+      const map = {
+        mon: 'monday',
+        monday: 'monday',
+        tue: 'tuesday',
+        tues: 'tuesday',
+        tuesday: 'tuesday',
+        wed: 'wednesday',
+        weds: 'wednesday',
+        wednesday: 'wednesday',
+        thu: 'thursday',
+        thur: 'thursday',
+        thurs: 'thursday',
+        thursday: 'thursday',
+        fri: 'friday',
+        friday: 'friday',
+        sat: 'saturday',
+        saturday: 'saturday',
+        sun: 'sunday',
+        sunday: 'sunday',
+        m: 'monday',
+        t: 'tuesday',
+        w: 'wednesday',
+        f: 'friday',
+        s: 'saturday',
+      };
+      return map[token] || null;
+    };
+
+    const expandCompactPattern = (value) => {
+      const compact = String(value || '').trim().toLowerCase();
+      if (!/^[mtwhfsu]+$/.test(compact) || compact.length <= 1) return [];
+
+      return compact
+        .split('')
+        .map((char) => normalizeDayToken(char))
+        .filter(Boolean);
+    };
+
+    const listedDays = Array.isArray(selectedClass.scheduleDays)
+      ? selectedClass.scheduleDays
+      : [];
+
+    const scheduleText = String(selectedClass.schedule || '');
+    const inferredFullDays = scheduleText.match(/Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday/gi) || [];
+    const inferredShortDays = scheduleText.match(/\bMon|Tue|Tues|Wed|Thu|Thur|Thurs|Fri|Sat|Sun\b/gi) || [];
+    const compactTokens = scheduleText.match(/\b[MTWHFSU]{2,}\b/gi) || [];
+
+    const expandedCompactDays = compactTokens.flatMap((token) => expandCompactPattern(token));
+
+    const days = [...listedDays, ...inferredFullDays, ...inferredShortDays, ...expandedCompactDays]
+      .map((d) => normalizeDayToken(d) || String(d).trim().toLowerCase())
+      .filter(Boolean);
+
+    if (days.length === 0) return true;
+    return days.includes(selectedDateDay.toLowerCase());
+  }, [selectedClass, selectedDateDay]);
 
   // Students with attendance records
   const [students, setStudents] = useState([]);
@@ -63,6 +135,11 @@ function TeacherAttendance() {
       };
 
       const classesData = classRows.map(c => ({
+        scheduleDays: Array.isArray(c.schedules)
+          ? c.schedules
+              .map((item) => asText(item?.day_of_week))
+              .filter(Boolean)
+          : [],
         id: c.id,
         code: asText(c.subject?.subject_code) || asText(c.subject_code) || asText(c.code) || 'N/A',
         name: asText(c.subject?.subject_name) || asText(c.subject_name) || asText(c.name) || 'Class',
@@ -90,19 +167,69 @@ function TeacherAttendance() {
     if (!selectedClassId || !selectedDate) return;
 
     setLoading(true);
+    setAttendanceEnabled(true); // Reset to true before checking
     try {
+      // Fetch the grading scheme for this class first
+      const token = localStorage.getItem('auth_token');
+      const gradingSchemeRes = await fetch(
+        `${import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api'}/classes/${selectedClassId}/grading-scheme`,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        }
+      );
+      
+      if (gradingSchemeRes.ok) {
+        const gradingData = await gradingSchemeRes.json();
+        const scheme = gradingData?.data || gradingData;
+        const weights = scheme?.weights || {};
+        const hiddenComponents = Array.isArray(scheme?.hidden_base_components) ? scheme.hidden_base_components : [];
+        
+        // Check if attendance weight is 0 or hidden
+        const attendanceWeight = Number(weights?.attendance || 0);
+        const isAttendanceHidden = hiddenComponents.includes('attendance');
+        
+        if (attendanceWeight === 0 || isAttendanceHidden) {
+          setAttendanceEnabled(false);
+          setStudents([]);
+          setLoading(false);
+          return;
+        }
+      }
+
       const [studentsRes, attendanceRes] = await Promise.all([
-        classService.getStudents(selectedClassId),
+        classService.getStudents(selectedClassId, { per_page: 1000 }),
         attendanceService.getByClassAndDate(selectedClassId, selectedDate)
       ]);
 
-      const enrollmentRows = Array.isArray(studentsRes?.data)
-        ? studentsRes.data
-        : Array.isArray(studentsRes)
-          ? studentsRes
+      const studentsPayload = studentsRes?.data ?? studentsRes;
+      const enrollmentRows = Array.isArray(studentsPayload)
+        ? studentsPayload
+        : Array.isArray(studentsPayload?.data)
+          ? studentsPayload.data
           : [];
 
-      const studentsData = enrollmentRows.map(row => {
+      const classEnrollmentRows = enrollmentRows.filter((row) => {
+        if (!row?.class_id) return true;
+        return Number(row.class_id) === Number(selectedClassId);
+      });
+
+      classEnrollmentRows.sort((left, right) => {
+        const leftStudent = left.student || left;
+        const rightStudent = right.student || right;
+
+        const leftLast = String(leftStudent?.last_name || '').trim().toLowerCase();
+        const rightLast = String(rightStudent?.last_name || '').trim().toLowerCase();
+        if (leftLast !== rightLast) return leftLast.localeCompare(rightLast);
+
+        const leftFirst = String(leftStudent?.first_name || '').trim().toLowerCase();
+        const rightFirst = String(rightStudent?.first_name || '').trim().toLowerCase();
+        return leftFirst.localeCompare(rightFirst);
+      });
+
+      const studentsData = classEnrollmentRows.map(row => {
         const s = row.student || row;
         return {
         id: s.id,
@@ -112,7 +239,8 @@ function TeacherAttendance() {
       }});
 
       // Map existing attendance records
-      const attendanceRecords = attendanceRes.data || attendanceRes || [];
+      const attendancePayload = attendanceRes?.attendance || attendanceRes?.data?.attendance || [];
+      const attendanceRecords = Array.isArray(attendancePayload) ? attendancePayload : [];
       attendanceRecords.forEach(a => {
         const student = studentsData.find(s => s.id === a.student_id);
         if (student) {
@@ -138,9 +266,13 @@ function TeacherAttendance() {
 
   useEffect(() => {
     if (selectedClassId) {
-      fetchAttendance();
+      if (classHasScheduleOnSelectedDate) {
+        fetchAttendance();
+      } else {
+        setStudents([]);
+      }
     }
-  }, [selectedClassId, selectedDate, fetchAttendance]);
+  }, [selectedClassId, selectedDate, fetchAttendance, classHasScheduleOnSelectedDate]);
 
   // Handle attendance status change
   const handleStatusChange = (studentId, newStatus) => {
@@ -159,25 +291,57 @@ function TeacherAttendance() {
   // Save attendance
   const handleSaveAttendance = async () => {
     if (!selectedClassId || !selectedDate) {
-      alert('Please select a class and date');
+      await Swal.fire({
+        icon: 'warning',
+        title: 'Missing Selection',
+        text: 'Please select a class and date before saving attendance.',
+        confirmButtonColor: '#2563eb',
+      });
+      return;
+    }
+
+    const currentUser = authService.getCurrentUser();
+    const recorderId = currentUser?.id || null;
+
+    if (!recorderId) {
+      await Swal.fire({
+        icon: 'error',
+        title: 'Save Failed',
+        text: 'Unable to identify the logged-in user for attendance recording.',
+        confirmButtonColor: '#dc2626',
+      });
       return;
     }
 
     setSaving(true);
     try {
-      const attendanceData = students.map(s => ({
-        student_id: s.id,
+      const attendanceData = {
         class_id: selectedClassId,
         date: selectedDate,
-        status: s.status,
-        remarks: s.remarks || '',
-      }));
+        recorded_by: recorderId,
+        students: students.map((s) => ({
+          student_id: s.id,
+          status: s.status,
+          remarks: s.remarks || '',
+        })),
+      };
 
       await attendanceService.bulkSave(attendanceData);
-      alert('Attendance saved successfully!');
+      await fetchAttendance();
+      await Swal.fire({
+        icon: 'success',
+        title: 'Attendance Saved',
+        text: 'Attendance has been saved and reloaded from the database.',
+        confirmButtonColor: '#2563eb',
+      });
     } catch (err) {
       console.error('Error saving attendance:', err);
-      alert('Failed to save attendance. Please try again.');
+      await Swal.fire({
+        icon: 'error',
+        title: 'Save Failed',
+        text: 'Failed to save attendance. Please try again.',
+        confirmButtonColor: '#dc2626',
+      });
     } finally {
       setSaving(false);
     }
@@ -186,6 +350,12 @@ function TeacherAttendance() {
   // Mark all as present
   const handleMarkAllPresent = () => {
     setStudents(prev => prev.map(s => ({ ...s, status: 'present' })));
+  };
+
+  const handleBackToClassSelection = () => {
+    setSelectedClassId(null);
+    setStudents([]);
+    setError(null);
   };
 
   // Calculate attendance summary
@@ -232,10 +402,10 @@ function TeacherAttendance() {
   };
 
   return (
-    <div className="flex min-h-screen bg-linear-to-br from-slate-50 via-blue-50 to-indigo-50">
+    <div className="flex h-screen bg-linear-to-br from-slate-50 via-blue-50 to-indigo-50">
       <Sidebar activeItem={activeItem} setActiveItem={setActiveItem} />
       
-      <main className="flex-1 p-8 ml-64">
+      <main className="flex-1 p-8 overflow-y-auto">
         {/* Header */}
         <div className="mb-8">
           <div className="flex items-center text-sm text-gray-500 mb-2">
@@ -290,8 +460,17 @@ function TeacherAttendance() {
                 <div className="text-sm text-gray-600">
                   <span className="font-medium">{selectedClass.name}</span> • {selectedClass.schedule}
                 </div>
-                <div className="text-sm text-gray-500">
-                  {attendanceSummary.total} students enrolled
+                <div className="flex items-center gap-3">
+                  <div className="text-sm text-gray-500">
+                    {attendanceSummary.total} students enrolled
+                  </div>
+                  <button
+                    onClick={handleBackToClassSelection}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-300 bg-white text-gray-700 text-sm font-medium hover:bg-gray-50"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                    Back
+                  </button>
                 </div>
               </div>
             </div>
@@ -300,6 +479,31 @@ function TeacherAttendance() {
 
         {selectedClassId ? (
           <>
+            {!attendanceEnabled && (
+              <div className="mb-6 rounded-xl border border-rose-200 bg-rose-50 p-4 text-rose-800">
+                <div className="flex items-center gap-3">
+                  <AlertCircle className="w-5 h-5 shrink-0" />
+                  <div>
+                    <p className="font-semibold">Attendance Tracking Disabled</p>
+                    <p className="text-sm mt-1">
+                      The admin has disabled attendance tracking for {selectedClass?.name || 'this class'}. Attendance weight is no longer counted in the grading scheme.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {attendanceEnabled && !classHasScheduleOnSelectedDate && (
+              <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-800">
+                <p className="text-sm font-semibold">No class scheduled on this date.</p>
+                <p className="text-sm mt-1">
+                  {selectedClass?.name || 'This class'} is not scheduled for {selectedDateDay || 'the selected day'}. Please choose a date that matches the class schedule.
+                </p>
+              </div>
+            )}
+
+            {attendanceEnabled && classHasScheduleOnSelectedDate ? (
+              <>
             {/* Attendance Summary */}
             <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
@@ -478,6 +682,14 @@ function TeacherAttendance() {
                     No students found for this class
                   </div>
                 )}
+              </div>
+            )}
+              </>
+            ) : (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
+                <Calendar className="w-14 h-14 text-amber-300 mx-auto mb-3" />
+                <h3 className="text-lg font-medium text-gray-900 mb-2">No class for this date</h3>
+                <p className="text-gray-600">Select another date that matches the class schedule to mark attendance.</p>
               </div>
             )}
           </>

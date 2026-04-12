@@ -63,6 +63,38 @@ const attendanceService = {
   },
 
   /**
+   * Backward-compatible bulk save for attendance page.
+   * Accepts either:
+   * 1) array of { student_id, class_id, date, status, remarks }
+   * 2) object { class_id, date, students: [{ student_id, status, remarks, time_in?, time_out? }] }
+   */
+  bulkSave: async (payload) => {
+    let recordData = payload;
+
+    if (Array.isArray(payload)) {
+      if (payload.length === 0) {
+        return { success: true, message: 'No attendance rows to save', data: [] };
+      }
+
+      const first = payload[0] || {};
+      recordData = {
+        class_id: first.class_id,
+        date: first.date,
+        students: payload.map((row) => ({
+          student_id: row.student_id,
+          status: row.status,
+          remarks: row.remarks || '',
+          time_in: row.time_in || null,
+          time_out: row.time_out || null,
+        })),
+      };
+    }
+
+    const response = await api.post('/attendance/record', recordData);
+    return response.data;
+  },
+
+  /**
    * Get attendance by class and date
    * @param {number} classId 
    * @param {string} date - Format: YYYY-MM-DD

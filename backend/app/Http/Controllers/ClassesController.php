@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Classes;
 use App\Models\Schedule;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class ClassesController extends Controller
 {
@@ -108,6 +109,9 @@ class ClassesController extends Controller
             'status' => 'required|in:active,completed,cancelled',
         ]);
 
+        $scheduleItems = $validated['schedule'] ?? [];
+        unset($validated['schedule']);
+
         // Auto-generate class code if not provided
         if (empty($validated['class_code'])) {
             $validated['class_code'] = $this->generateClassCode($validated);
@@ -129,12 +133,18 @@ class ClassesController extends Controller
         $validated['enrolled_count'] = 0;
         $validated['capacity'] = $validated['capacity'] ?? 30;
 
-        $class = Classes::create($validated);
+        $class = DB::transaction(function () use ($validated, $scheduleItems) {
+            $class = Classes::create($validated);
+
+            $this->syncClassSchedules($class, $scheduleItems);
+
+            return $class->fresh(['subject', 'teacher', 'section', 'academicYear', 'schedules']);
+        });
         
         return response()->json([
             'success' => true,
             'message' => 'Class created successfully',
-            'data' => $class->load(['subject', 'teacher', 'section', 'academicYear'])
+            'data' => $class
         ], 201);
     }
 
@@ -172,12 +182,21 @@ class ClassesController extends Controller
             'status' => 'in:active,completed,cancelled',
         ]);
 
-        $class->update($validated);
+        $scheduleItems = $validated['schedule'] ?? null;
+        unset($validated['schedule']);
+
+        DB::transaction(function () use ($class, $validated, $scheduleItems) {
+            $class->update($validated);
+
+            if (is_array($scheduleItems)) {
+                $this->syncClassSchedules($class, $scheduleItems);
+            }
+        });
         
         return response()->json([
             'success' => true,
             'message' => 'Class updated successfully',
-            'data' => $class->load(['subject', 'teacher', 'section', 'academicYear'])
+            'data' => $class->fresh(['subject', 'teacher', 'section', 'academicYear', 'schedules'])
         ]);
     }
 
@@ -223,6 +242,17 @@ class ClassesController extends Controller
                   ->orWhere('student_number', 'like', "%{$search}%");
             });
         }
+
+        // Ensure class rosters are sorted alphabetically by student's last name.
+        $query->orderBy(
+            \App\Models\Students::select('last_name')
+                ->whereColumn('students.id', 'enrollments.student_id')
+                ->limit(1)
+        )->orderBy(
+            \App\Models\Students::select('first_name')
+                ->whereColumn('students.id', 'enrollments.student_id')
+                ->limit(1)
+        );
         
         $perPage = $request->get('per_page', 30);
         $students = $query->paginate($perPage);
@@ -387,6 +417,47 @@ class ClassesController extends Controller
     }
 
     /**
+     * Sync schedule rows for a class using schedules.class_id ownership.
+     */
+    private function syncClassSchedules(Classes $class, array $scheduleItems): void
+    {
+        $items = collect($scheduleItems)
+            ->filter(fn ($item) => is_array($item))
+            ->values();
+
+        if ($items->isEmpty()) {
+            $class->schedules()->delete();
+            return;
+        }
+
+        $existingSchedules = $class->schedules()->get()->keyBy('id');
+        $keptIds = [];
+
+        foreach ($items as $item) {
+            $payload = [
+                'day_of_week' => $item['day_of_week'] ?? $item['day'] ?? 'Monday',
+                'time_start' => $item['time_start'] ?? $item['start_time'] ?? '08:00:00',
+                'time_end' => $item['time_end'] ?? $item['end_time'] ?? '09:00:00',
+                'room_number' => $item['room_number'] ?? $item['room'] ?? null,
+                'building' => $item['building'] ?? null,
+            ];
+
+            $scheduleId = $item['id'] ?? null;
+            if ($scheduleId && $existingSchedules->has($scheduleId)) {
+                $schedule = $existingSchedules[$scheduleId];
+                $schedule->update($payload);
+                $keptIds[] = $schedule->id;
+                continue;
+            }
+
+            $newSchedule = $class->schedules()->create($payload);
+            $keptIds[] = $newSchedule->id;
+        }
+
+        $class->schedules()->whereNotIn('id', $keptIds)->delete();
+    }
+
+    /**
      * Check for teacher schedule conflicts
      */
     public function checkTeacherConflicts(Request $request)
@@ -486,16 +557,16 @@ class ClassesController extends Controller
     private function findTeacherConflicts($teacherId, $dayOfWeek, $timeStart, $timeEnd, $academicYearId, $excludeClassId = null)
     {
         // Get all active classes for this teacher in the academic year
-        $classIds = Classes::where('teacher_id', $teacherId)
-            ->where('academic_year_id', $academicYearId)
-            ->where('status', 'active')
-            ->when($excludeClassId, function ($query, $excludeId) {
-                return $query->where('id', '!=', $excludeId);
-            })
-            ->pluck('id');
-
         // Find conflicting schedules
-        return Schedule::whereIn('class_id', $classIds)
+        return Schedule::whereHas('class', function ($q) use ($teacherId, $academicYearId, $excludeClassId) {
+                $q->where('teacher_id', $teacherId)
+                  ->where('academic_year_id', $academicYearId)
+                  ->where('status', 'active');
+
+                if ($excludeClassId) {
+                    $q->where('id', '!=', $excludeClassId);
+                }
+            })
             ->where('day_of_week', $dayOfWeek)
             ->where(function ($query) use ($timeStart, $timeEnd) {
                 $query->where(function ($q) use ($timeStart, $timeEnd) {
@@ -513,16 +584,16 @@ class ClassesController extends Controller
     private function findSectionConflicts($sectionId, $dayOfWeek, $timeStart, $timeEnd, $academicYearId, $excludeClassId = null)
     {
         // Get all active classes for this section in the academic year
-        $classIds = Classes::where('section_id', $sectionId)
-            ->where('academic_year_id', $academicYearId)
-            ->where('status', 'active')
-            ->when($excludeClassId, function ($query, $excludeId) {
-                return $query->where('id', '!=', $excludeId);
-            })
-            ->pluck('id');
-
         // Find conflicting schedules
-        return Schedule::whereIn('class_id', $classIds)
+        return Schedule::whereHas('class', function ($q) use ($sectionId, $academicYearId, $excludeClassId) {
+                $q->where('section_id', $sectionId)
+                  ->where('academic_year_id', $academicYearId)
+                  ->where('status', 'active');
+
+                if ($excludeClassId) {
+                    $q->where('id', '!=', $excludeClassId);
+                }
+            })
             ->where('day_of_week', $dayOfWeek)
             ->where(function ($query) use ($timeStart, $timeEnd) {
                 $query->where(function ($q) use ($timeStart, $timeEnd) {
@@ -545,15 +616,15 @@ class ClassesController extends Controller
         ]);
 
         // Get all scheduled times for this teacher
-        $classIds = Classes::where('teacher_id', $teacherId)
-            ->where('academic_year_id', $validated['academic_year_id'])
-            ->where('status', 'active')
-            ->pluck('id');
-
-        $schedules = Schedule::whereIn('class_id', $classIds)
+        $schedules = Schedule::whereHas('class', function ($q) use ($teacherId, $validated) {
+                $q->where('teacher_id', $teacherId)
+                  ->where('academic_year_id', $validated['academic_year_id'])
+                  ->where('status', 'active');
+            })
             ->where('day_of_week', $validated['day_of_week'])
             ->orderBy('time_start')
-            ->get(['time_start', 'time_end', 'class_id'])
+            ->with('class:id')
+            ->get(['id', 'class_id', 'time_start', 'time_end'])
             ->map(function ($s) {
                 return [
                     'start' => $s->time_start,

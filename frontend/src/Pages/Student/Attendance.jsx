@@ -2,22 +2,8 @@ import '../../App.css';
 import { useState, useEffect, useCallback } from 'react';
 import Sidebar from '../../Components/Student/Sidebar.jsx';
 import { CheckCircle2, XCircle, AlertCircle, QrCode, BarChart3, Loader2 } from 'lucide-react';
-import attendanceService from '../../service/attendanceService';
-
-// Fallback data for development/demo
-const getFallbackAttendanceData = () => [
-  { code: 'CS 301', subject: 'Data Structures & Algorithms', present: 22, absent: 1, excused: 1, percentage: 91 },
-  { code: 'CS 302', subject: 'Database Management Systems', present: 21, absent: 2, excused: 1, percentage: 88 },
-  { code: 'CS 303', subject: 'Software Engineering', present: 23, absent: 0, excused: 1, percentage: 95 },
-  { code: 'CS 305', subject: 'Computer Networks', present: 20, absent: 3, excused: 1, percentage: 85 },
-];
-
-const getFallbackQrHistory = () => [
-  { date: 'Jan 12, 2026', time: '08:05 AM', subject: 'CS 301', status: 'Present' },
-  { date: 'Jan 11, 2026', time: '10:01 AM', subject: 'CS 302', status: 'Present' },
-  { date: 'Jan 10, 2026', time: '01:04 PM', subject: 'CS 303', status: 'Present' },
-  { date: 'Jan 09, 2026', time: '03:02 PM', subject: 'CS 305', status: 'Excused' },
-];
+import authService from '../../service/authService';
+import studentService from '../../service/studentService';
 
 function Attendance() {
   const [activeItem, setActiveItem] = useState('Attendance');
@@ -30,18 +16,29 @@ function Attendance() {
     setLoading(true);
     setError(null);
     try {
-      // Fetch student's attendance records
-      const response = await attendanceService.getAll();
-      const records = response.data || response || [];
+      const profileResponse = await authService.getProfile();
+      const profileUser = profileResponse?.data || profileResponse || {};
+      const student = profileUser.student || profileUser;
+      const studentId = student?.id || profileUser.student_id || profileUser.id;
+
+      if (!studentId) {
+        throw new Error('Student profile is missing an ID.');
+      }
+
+      // Fetch the logged-in student's attendance records
+      const response = await studentService.getAttendance(studentId);
+      const records = response?.attendance?.data || response?.attendance || response?.data || [];
       
       // Process records to get per-subject summary
       const subjectMap = {};
       const history = [];
       
-      records.forEach(record => {
-        const subjectCode = record.subject?.code || record.subject_code || 'N/A';
-        const subjectName = record.subject?.name || record.subject_name || 'Unknown Subject';
+      records.forEach((record) => {
+        const subjectCode = record.class?.subject?.subject_code || record.subject?.code || record.subject_code || 'N/A';
+        const subjectName = record.class?.subject?.subject_name || record.subject?.name || record.subject_name || 'Unknown Subject';
         const status = record.status || 'Present';
+        const recordTimestamp = record.date || record.created_at || record.updated_at || null;
+        const recordDate = recordTimestamp ? new Date(recordTimestamp) : null;
         
         // Build subject summary
         if (!subjectMap[subjectCode]) {
@@ -65,10 +62,10 @@ function Attendance() {
         }
         
         // Build history (recent entries)
-        const recordDate = new Date(record.date || record.created_at);
         history.push({
-          date: recordDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-          time: recordDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+          timestamp: recordDate ? recordDate.getTime() : 0,
+          date: recordDate ? recordDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Unknown date',
+          time: recordDate ? recordDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : 'Unknown time',
           subject: subjectCode,
           status: status.charAt(0).toUpperCase() + status.slice(1).toLowerCase()
         });
@@ -81,15 +78,15 @@ function Attendance() {
       }));
       
       // Sort history by most recent
-      history.sort((a, b) => new Date(b.date) - new Date(a.date));
+      history.sort((a, b) => b.timestamp - a.timestamp);
       
-      setAttendanceData(summaryData.length > 0 ? summaryData : getFallbackAttendanceData());
-      setQrHistory(history.length > 0 ? history.slice(0, 10) : getFallbackQrHistory());
+      setAttendanceData(summaryData);
+      setQrHistory(history.slice(0, 10));
     } catch (err) {
       console.error('Failed to fetch attendance:', err);
       setError('Failed to load attendance data');
-      setAttendanceData(getFallbackAttendanceData());
-      setQrHistory(getFallbackQrHistory());
+      setAttendanceData([]);
+      setQrHistory([]);
     } finally {
       setLoading(false);
     }
@@ -134,6 +131,11 @@ function Attendance() {
             <h2 className="text-lg font-semibold text-gray-900">Attendance per Subject</h2>
             <span className="text-xs text-gray-500">Present / Absent / Excused</span>
           </div>
+          {attendanceData.length === 0 && (
+            <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+              No attendance yet. Your attendance records will appear here once they are recorded in the database.
+            </div>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="bg-gray-50 border-b border-gray-200">
@@ -185,7 +187,7 @@ function Attendance() {
             <h2 className="text-lg font-semibold text-gray-900">QR Attendance History</h2>
           </div>
           {qrHistory.length === 0 ? (
-            <p className="text-gray-500 text-center py-8">No attendance history found</p>
+            <p className="text-gray-500 text-center py-8">No attendance yet</p>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {qrHistory.map((entry, idx) => (

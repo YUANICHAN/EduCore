@@ -46,7 +46,6 @@ import StudentAttendance from './Pages/Student/Attendance.jsx'
 import StudentGrades from './Pages/Student/Grades.jsx'
 import StudentAnnouncements from './Pages/Student/Announcements.jsx'
 import StudentReports from './Pages/Student/Reports.jsx'
-import StudentSettings from './Pages/Student/Settings.jsx'
 
 function App() {
 
@@ -269,11 +268,6 @@ function App() {
           <Route path="/student/reports" element={
             <ProtectedRoute allowedRoles={['student']}>
               <StudentReports />
-            </ProtectedRoute>
-          } />
-          <Route path="/student/settings" element={
-            <ProtectedRoute allowedRoles={['student']}>
-              <StudentSettings />
             </ProtectedRoute>
           } />
 

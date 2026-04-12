@@ -127,9 +127,9 @@ function MyClasses() {
 
     if (loading) {
         return (
-            <div className="flex h-screen">
+            <div className="flex h-screen overflow-hidden bg-gray-50">
                 <Sidebar activeItem={activeItem} setActiveItem={setActiveItem} />
-                <div className="h-screen bg-gray-50 p-8 flex-1 flex items-center justify-center">
+                <div className="flex-1 h-full bg-gray-50 p-8 flex items-center justify-center">
                     <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
                 </div>
             </div>
@@ -137,9 +137,9 @@ function MyClasses() {
     }
 
     return (
-        <div className="flex h-screen">
+        <div className="flex h-screen overflow-hidden bg-gray-50">
             <Sidebar activeItem={activeItem} setActiveItem={setActiveItem} />
-            <div className="h-screen bg-gray-50 p-8 flex-1 overflow-y-auto">
+            <div className="flex-1 h-full bg-gray-50 p-8 overflow-y-auto">
                 {/* Header */}
                 <div className="flex justify-between items-center mb-8">
                     <div>

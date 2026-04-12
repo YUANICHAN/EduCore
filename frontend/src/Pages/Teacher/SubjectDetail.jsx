@@ -120,7 +120,7 @@ function SubjectDetail() {
 
     if (loading) {
         return (
-            <div className="flex h-screen">
+            <div className="flex h-screen overflow-hidden bg-gray-50">
                 <Sidebar activeItem={activeItem} setActiveItem={setActiveItem} />
                 <div className="flex-1 flex items-center justify-center">
                     <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
@@ -132,9 +132,9 @@ function SubjectDetail() {
 
     if (!subject) {
         return (
-            <div className="flex h-screen">
+            <div className="flex h-screen overflow-hidden bg-gray-50">
                 <Sidebar activeItem={activeItem} setActiveItem={setActiveItem} />
-                <div className="h-screen bg-gray-50 p-8 flex-1 overflow-y-auto">
+                <div className="flex-1 h-full bg-gray-50 p-8 overflow-y-auto">
                     <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-12 text-center">
                         <Library className="w-16 h-16 text-gray-400 mx-auto mb-4" />
                         <h3 className="text-lg font-semibold text-gray-900 mb-2">Subject not found</h3>
@@ -151,9 +151,9 @@ function SubjectDetail() {
     }
 
     return (
-        <div className="flex h-screen">
+        <div className="flex h-screen overflow-hidden bg-gray-50">
             <Sidebar activeItem={activeItem} setActiveItem={setActiveItem} />
-            <div className="h-screen bg-gray-50 p-8 flex-1 overflow-y-auto">
+            <div className="flex-1 h-full bg-gray-50 p-8 overflow-y-auto">
                 {/* Breadcrumbs */}
                 <nav className="flex items-center space-x-2 text-sm text-gray-600 mb-6">
                     <button

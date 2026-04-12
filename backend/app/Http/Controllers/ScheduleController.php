@@ -66,7 +66,14 @@ class ScheduleController extends Controller
             ], 422);
         }
 
-        $schedule = Schedule::create($validated);
+        $schedule = Schedule::create([
+            'class_id' => $validated['class_id'],
+            'day_of_week' => $validated['day_of_week'],
+            'time_start' => $validated['time_start'],
+            'time_end' => $validated['time_end'],
+            'room_number' => $validated['room_number'] ?? null,
+            'building' => $validated['building'] ?? null,
+        ]);
         
         return response()->json([
             'success' => true,
@@ -111,7 +118,14 @@ class ScheduleController extends Controller
             ], 422);
         }
 
-        $schedule->update($validated);
+        $schedule->update([
+            'class_id' => $validated['class_id'] ?? $schedule->class_id,
+            'day_of_week' => $validated['day_of_week'] ?? $schedule->day_of_week,
+            'time_start' => $validated['time_start'] ?? $schedule->time_start,
+            'time_end' => $validated['time_end'] ?? $schedule->time_end,
+            'room_number' => array_key_exists('room_number', $validated) ? $validated['room_number'] : $schedule->room_number,
+            'building' => array_key_exists('building', $validated) ? $validated['building'] : $schedule->building,
+        ]);
         
         return response()->json([
             'success' => true,
@@ -182,7 +196,12 @@ class ScheduleController extends Controller
      */
     private function checkScheduleConflict(array $data, $excludeId = null)
     {
-        $class = Classes::find($data['class_id']);
+        $classId = $data['class_id'] ?? null;
+        if (!$classId) {
+            return null;
+        }
+
+        $class = Classes::find($classId);
         if (!$class) return null;
 
         // Check room conflict

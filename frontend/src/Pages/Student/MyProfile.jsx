@@ -1,6 +1,7 @@
 import '../../App.css';
 import { useState, useEffect, useCallback } from "react";
 import Sidebar from "../../Components/Student/Sidebar.jsx";
+import Swal from 'sweetalert2';
 import { 
   User,
   Mail,
@@ -123,6 +124,13 @@ function MyProfile() {
             });
             setContactInfo({...editedContact});
             setIsEditingContact(false);
+            await Swal.fire({
+                title: 'Contact Information Updated',
+                text: 'Your contact information has been saved successfully.',
+                icon: 'success',
+                confirmButtonText: 'OK',
+                confirmButtonColor: '#2563eb',
+            });
         } catch (err) {
             console.error('Failed to save contact info:', err);
             setError('Failed to save contact information');

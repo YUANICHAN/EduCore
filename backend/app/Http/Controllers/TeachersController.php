@@ -569,11 +569,9 @@ class TeachersController extends Controller
     public function schedule(Teachers $teacher, Request $request)
     {
         // Get teacher's classes
-        $classIds = Classes::where('teacher_id', $teacher->id)
-            ->where('status', 'active')
-            ->pluck('id');
-        
-        $query = Schedule::whereIn('class_id', $classIds)
+        $query = Schedule::whereHas('class', function ($q) use ($teacher) {
+            $q->where('teacher_id', $teacher->id)->where('status', 'active');
+        })
             ->with(['class.subject', 'class.section']);
         
         // Filter by day
@@ -643,7 +641,7 @@ class TeachersController extends Controller
             return $daySchedules->map(function ($s) {
                 return [
                     'id' => $s->id,
-                    'class_id' => $s->class_id,
+                    'class_id' => $s->class?->id,
                     'subject' => $s->class->subject->subject_name ?? 'N/A',
                     'subject_code' => $s->class->subject->subject_code ?? 'N/A',
                     'section' => $s->class->section->name ?? 'N/A',
@@ -1230,15 +1228,15 @@ class TeachersController extends Controller
      */
     private function findScheduleConflicts($teacherId, $dayOfWeek, $timeStart, $timeEnd, $academicYearId, $excludeClassId = null)
     {
-        $classIds = Classes::where('teacher_id', $teacherId)
-            ->where('academic_year_id', $academicYearId)
-            ->where('status', 'active')
-            ->when($excludeClassId, function ($query, $excludeId) {
-                return $query->where('id', '!=', $excludeId);
-            })
-            ->pluck('id');
+        return Schedule::whereHas('class', function ($q) use ($teacherId, $academicYearId, $excludeClassId) {
+                $q->where('teacher_id', $teacherId)
+                  ->where('academic_year_id', $academicYearId)
+                  ->where('status', 'active');
 
-        return Schedule::whereIn('class_id', $classIds)
+                if ($excludeClassId) {
+                    $q->where('id', '!=', $excludeClassId);
+                }
+            })
             ->where('day_of_week', $dayOfWeek)
             ->where(function ($query) use ($timeStart, $timeEnd) {
                 $query->where(function ($q) use ($timeStart, $timeEnd) {

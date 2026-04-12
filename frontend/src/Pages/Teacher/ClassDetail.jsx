@@ -231,7 +231,7 @@ function ClassDetail() {
 
     if (loading) {
         return (
-            <div className="flex h-screen">
+            <div className="flex h-screen overflow-hidden bg-gray-50">
                 <Sidebar activeItem={activeItem} setActiveItem={setActiveItem} />
                 <div className="flex-1 flex items-center justify-center">
                     <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
@@ -243,7 +243,7 @@ function ClassDetail() {
 
     if (error && !classData) {
         return (
-            <div className="flex h-screen">
+            <div className="flex h-screen overflow-hidden bg-gray-50">
                 <Sidebar activeItem={activeItem} setActiveItem={setActiveItem} />
                 <div className="flex-1 flex items-center justify-center text-red-500">
                     <AlertCircle className="w-6 h-6 mr-2" />
@@ -254,9 +254,9 @@ function ClassDetail() {
     }
 
     return (
-        <div className="flex h-screen">
+        <div className="flex h-screen overflow-hidden bg-gray-50">
             <Sidebar activeItem={activeItem} setActiveItem={setActiveItem} />
-            <div className="h-screen bg-gray-50 p-8 flex-1 overflow-y-auto">
+            <div className="flex-1 h-full bg-gray-50 p-8 overflow-y-auto">
                 {/* Breadcrumbs */}
                 <nav className="flex items-center space-x-2 text-sm text-gray-600 mb-6">
                     <button

@@ -533,9 +533,9 @@ function Gradebook() {
   };
 
   return (
-    <div className="flex h-screen">
+    <div className="flex h-screen overflow-hidden bg-gray-50">
       <Sidebar activeItem={activeItem} setActiveItem={setActiveItem} />
-      <div className="h-screen bg-gray-50 p-8 flex-1 overflow-y-auto">
+      <div className="flex-1 h-full bg-gray-50 p-8 overflow-y-auto">
         {/* Breadcrumbs only when a subject is selected */}
         {selectedSubject && (
           <nav className="flex items-center space-x-2 text-sm text-gray-600 mb-6">

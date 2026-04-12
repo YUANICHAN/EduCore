@@ -2,51 +2,37 @@ import '../../App.css';
 import { useMemo, useState, useEffect, useCallback, Fragment } from 'react';
 import Sidebar from '../../Components/Student/Sidebar.jsx';
 import { Calendar, Clock, MapPin, Bell, Sparkles, Loader2, AlertCircle } from 'lucide-react';
-import scheduleService from '../../service/scheduleService';
+import authService from '../../service/authService';
+import studentService from '../../service/studentService';
 
-// Fallback schedule data for development/demo
-const getFallbackSections = () => [
-  {
-    day: 'Monday',
-    subject: 'Data Structures & Algorithms',
-    code: 'CS 301',
-    time: '08:00 AM - 09:30 AM',
-    room: 'Room 402',
-    teacher: 'Prof. Maria Santos',
-  },
-  {
-    day: 'Monday',
-    subject: 'Database Management Systems',
-    code: 'CS 302',
-    time: '10:00 AM - 11:30 AM',
-    room: 'Lab 3',
-    teacher: 'Prof. Juan Cruz',
-  },
-  {
-    day: 'Wednesday',
-    subject: 'Software Engineering',
-    code: 'CS 303',
-    time: '01:00 PM - 02:30 PM',
-    room: 'Room 405',
-    teacher: 'Prof. Ana Reyes',
-  },
-  {
-    day: 'Thursday',
-    subject: 'Computer Networks',
-    code: 'CS 305',
-    time: '03:00 PM - 04:30 PM',
-    room: 'Room 210',
-    teacher: 'Prof. Liza Dizon',
-  },
-  {
-    day: 'Friday',
-    subject: 'Filipino sa Iba\'t Ibang Disiplina',
-    code: 'GE 101',
-    time: '09:00 AM - 10:30 AM',
-    room: 'Room 102',
-    teacher: 'Prof. Carla Flores',
-  },
-];
+const WEEK_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function getDayIndex(dayValue) {
+  const normalizedDay = String(dayValue || '').trim().toLowerCase();
+  const index = WEEK_DAYS.findIndex((day) => day.toLowerCase() === normalizedDay);
+  return index >= 0 ? index : 0;
+}
+
+function parseScheduleTimeToMinutes(timePart) {
+  const trimmed = (timePart || '').trim();
+  if (!trimmed) return null;
+
+  const match = trimmed.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*(AM|PM))?$/i);
+  if (!match) return null;
+
+  let hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const meridiem = match[4] ? match[4].toUpperCase() : null;
+
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
+
+  if (meridiem) {
+    if (meridiem === 'PM' && hours !== 12) hours += 12;
+    if (meridiem === 'AM' && hours === 12) hours = 0;
+  }
+
+  return hours * 60 + minutes;
+}
 
 function groupByDay(sections) {
   const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -58,45 +44,103 @@ function groupByDay(sections) {
   return days.map((day) => ({ day, classes: map[day] || [] }));
 }
 
+function formatTimeLabel(timeValue) {
+  if (!timeValue) return 'TBA';
+
+  const text = String(timeValue).trim();
+  const match = text.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*(AM|PM))?$/i);
+  if (!match) return text;
+
+  let hours = Number(match[1]);
+  const minutes = match[2];
+  const meridiem = match[4] ? match[4].toUpperCase() : null;
+
+  if (meridiem) {
+    if (meridiem === 'PM' && hours !== 12) hours += 12;
+    if (meridiem === 'AM' && hours === 12) hours = 0;
+  }
+
+  const displayMeridiem = hours >= 12 ? 'PM' : 'AM';
+  const displayHour = hours === 0 ? 12 : hours > 12 ? hours - 12 : hours;
+  return `${displayHour}:${minutes} ${displayMeridiem}`;
+}
+
 function Schedule() {
   const [activeItem, setActiveItem] = useState('Schedule');
   const [reminders, setReminders] = useState({});
   const [enrolledSections, setEnrolledSections] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [currentTime, setCurrentTime] = useState(() => new Date());
 
   const fetchSchedule = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const response = await scheduleService.getAll();
-      const schedules = response.data || response || [];
+      const profileResponse = await authService.getProfile();
+      const profileUser = profileResponse?.data || profileResponse || {};
+      const student = profileUser.student || profileUser;
+      const studentId = student?.id || profileUser.student_id || profileUser.id;
+
+      if (!studentId) {
+        throw new Error('Student profile is missing an ID.');
+      }
+
+      const response = await studentService.getSchedule(studentId);
+      const schedules = response?.data || response?.schedule || [];
 
       const asText = (value, fallback = '') => {
         if (value === null || value === undefined) return fallback;
         if (typeof value === 'string' || typeof value === 'number') return String(value);
         return fallback;
       };
-      
-      // Map API response to component format
-      const mappedSections = schedules.map((schedule, index) => ({
-        id: schedule.id || `${index}`,
-        day: asText(schedule.day) || asText(schedule.day_of_week) || 'Monday',
-        subject: asText(schedule.subject?.subject_name) || asText(schedule.subject?.name) || asText(schedule.subject_name) || asText(schedule.class?.subject?.subject_name) || asText(schedule.class?.subject?.name) || 'Unknown Subject',
-        code: asText(schedule.subject?.subject_code) || asText(schedule.subject?.code) || asText(schedule.subject_code) || asText(schedule.class?.subject?.subject_code) || asText(schedule.class?.subject?.code) || 'N/A',
-        time: asText(schedule.time_slot) || `${asText(schedule.start_time, '08:00 AM')} - ${asText(schedule.end_time, '09:30 AM')}`,
-        room: asText(schedule.room) || asText(schedule.room_number) || 'TBA',
-        teacher: schedule.teacher?.name 
-          || (schedule.teacher?.first_name ? `Prof. ${schedule.teacher.first_name} ${schedule.teacher.last_name}` : null)
-          || schedule.teacher_name 
-          || 'TBA',
-      }));
-      
-      setEnrolledSections(mappedSections.length > 0 ? mappedSections : getFallbackSections());
+
+      const normalizeDay = (dayValue) => {
+        const normalized = asText(dayValue, '').trim().toLowerCase();
+        const dayMap = {
+          sunday: 'Sunday',
+          monday: 'Monday',
+          tuesday: 'Tuesday',
+          wednesday: 'Wednesday',
+          thursday: 'Thursday',
+          friday: 'Friday',
+          saturday: 'Saturday',
+        };
+        return dayMap[normalized] || 'Monday';
+      };
+
+      const mappedSections = schedules.map((schedule, index) => {
+        const classRecord = schedule.class || {};
+        const startTime = formatTimeLabel(schedule.time_start || schedule.start_time);
+        const endTime = formatTimeLabel(schedule.time_end || schedule.end_time);
+        const startMinutes = parseScheduleTimeToMinutes(schedule.time_start || schedule.start_time);
+        const endMinutes = parseScheduleTimeToMinutes(schedule.time_end || schedule.end_time);
+
+        return {
+          id: schedule.id || `${index}`,
+          classId: schedule.class_id || classRecord.id || null,
+          day: normalizeDay(schedule.day_of_week || schedule.day),
+          startMinutes,
+          endMinutes,
+          subject: asText(classRecord.subject?.subject_name) || asText(classRecord.subject?.name) || asText(schedule.subject?.subject_name) || asText(schedule.subject_name) || 'Unknown Subject',
+          code: asText(classRecord.subject?.subject_code) || asText(classRecord.subject?.code) || asText(schedule.subject?.subject_code) || asText(schedule.subject_code) || 'N/A',
+          classCode: asText(classRecord.class_code, 'N/A'),
+          time: `${startTime} - ${endTime}`,
+          room: asText(schedule.room_number || schedule.room, 'TBA'),
+          building: asText(schedule.building, ''),
+          teacher: classRecord.teacher?.name
+            || (classRecord.teacher?.first_name ? `Prof. ${classRecord.teacher.first_name} ${classRecord.teacher.last_name}` : null)
+            || schedule.teacher?.name
+            || (schedule.teacher?.first_name ? `Prof. ${schedule.teacher.first_name} ${schedule.teacher.last_name}` : null)
+            || 'TBA',
+        };
+      });
+
+      setEnrolledSections(mappedSections);
     } catch (err) {
       console.error('Failed to fetch schedule:', err);
       setError('Failed to load schedule');
-      setEnrolledSections(getFallbackSections());
+      setEnrolledSections([]);
     } finally {
       setLoading(false);
     }
@@ -106,16 +150,48 @@ function Schedule() {
     fetchSchedule();
   }, [fetchSchedule]);
 
+  useEffect(() => {
+    const timerId = window.setInterval(() => {
+      setCurrentTime(new Date());
+    }, 30000);
+
+    return () => window.clearInterval(timerId);
+  }, []);
+
   const week = useMemo(() => groupByDay(enrolledSections), [enrolledSections]);
   const classesThisWeek = enrolledSections.length;
   const remindersActive = Object.values(reminders).filter(Boolean).length;
 
-  const nextClass = enrolledSections[0] || { subject: 'No classes', time: '-' };
+  const nextClass = useMemo(() => {
+    if (enrolledSections.length === 0) {
+      return { subject: 'No classes', time: '-', day: '' };
+    }
+
+    const nowDay = currentTime.getDay();
+    const nowMinutes = currentTime.getHours() * 60 + currentTime.getMinutes();
+
+    const sortedSections = [...enrolledSections].sort((left, right) => {
+      const leftDay = getDayIndex(left.day);
+      const rightDay = getDayIndex(right.day);
+      if (leftDay !== rightDay) return leftDay - rightDay;
+      return (left.startMinutes ?? 0) - (right.startMinutes ?? 0);
+    });
+
+    const upcoming = sortedSections.find((section) => {
+      const sectionDay = getDayIndex(section.day);
+      if (sectionDay < nowDay) return false;
+      if (sectionDay > nowDay) return true;
+      if (section.startMinutes === null || section.startMinutes === undefined) return false;
+      return section.startMinutes >= nowMinutes;
+    }) || sortedSections[0];
+
+    return upcoming || { subject: 'No classes', time: '-', day: '' };
+  }, [currentTime, enrolledSections]);
 
   const timeSlots = useMemo(() => {
     const slots = [];
     const start = 7 * 60; // 7:00 AM
-    const end = 17 * 60; // 5:00 PM
+    const end = 22 * 60; // 10:00 PM
     for (let mins = start; mins <= end; mins += 30) {
       const hours = Math.floor(mins / 60);
       const minutes = mins % 60;
@@ -132,12 +208,12 @@ function Schedule() {
     if (!trimmed) return null;
 
     // Accept both 12-hour times (e.g. 8:00 AM) and 24-hour times (e.g. 08:00)
-    const match = trimmed.match(/^(\d{1,2}):(\d{2})(?:\s*(AM|PM))?$/i);
+    const match = trimmed.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*(AM|PM))?$/i);
     if (!match) return null;
 
     let hours = Number(match[1]);
     const minutes = Number(match[2]);
-    const meridiem = match[3] ? match[3].toUpperCase() : null;
+    const meridiem = match[4] ? match[4].toUpperCase() : null;
 
     if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
 
@@ -223,10 +299,24 @@ function Schedule() {
             <div>
               <p className="text-sm text-gray-600">Next Class</p>
               <p className="text-base font-semibold text-gray-900 leading-tight">{nextClass.subject}</p>
+              {nextClass.day ? <p className="text-xs text-gray-500">{nextClass.day}</p> : null}
               <p className="text-xs text-gray-600">{nextClass.time}</p>
             </div>
           </div>
         </div>
+
+        {classesThisWeek === 0 ? (
+          <div className="bg-white border border-gray-200 rounded-xl p-10 text-center">
+            <div className="mx-auto w-14 h-14 bg-blue-100 rounded-full flex items-center justify-center mb-4">
+              <Calendar className="w-7 h-7 text-blue-600" />
+            </div>
+            <h2 className="text-xl font-semibold text-gray-900">No schedules assigned yet</h2>
+            <p className="text-sm text-gray-600 mt-2">
+              Your class schedule is still being prepared. Please check back later or contact your adviser.
+            </p>
+          </div>
+        ) : (
+          <>
 
         {/* Desktop / Tablet */}
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden hidden md:block">
@@ -237,9 +327,9 @@ function Schedule() {
             </div>
           </div>
 
-          <div>
-            <div className="w-full">
-              <div className="grid w-full" style={{ gridTemplateColumns: `110px repeat(7, 1fr)` }}>
+          <div className="overflow-x-auto">
+            <div className="w-full min-w-275">
+              <div className="grid w-full" style={{ gridTemplateColumns: `110px repeat(7, minmax(130px, 1fr))` }}>
                 {/* Header row */}
                 <div className="bg-gray-100 border-r border-b border-gray-200 px-4 py-3 text-xs font-semibold text-gray-600 uppercase tracking-wide">Time</div>
                 {week.map((day) => (
@@ -264,66 +354,78 @@ function Schedule() {
                         {slot.label}
                       </div>
                       {week.map((day) => {
-                        const classAtSlot = day.classes.find((cls) => {
+                        const cellKey = `${day.day}-${slot.label}`;
+                        const classesAtSlot = day.classes.filter((cls) => {
                           const range = getTimeRangeMinutes(cls.time);
                           if (!range) return false;
                           return slot.minutes >= range.start && slot.minutes < range.end;
                         });
-                        const cellKey = `${day.day}-${slot.label}`;
-                        return (
-                          <div
-                            key={cellKey}
-                            className={`border-b border-r last:border-r-0 border-gray-200 px-3 py-3 ${
-                              isAlt ? 'bg-white' : 'bg-gray-50'
-                            } min-h-17.5`}
-                          >
-                            {!classAtSlot ? (
+
+                        const classAtSlotStart = day.classes.find((cls) => {
+                          const range = getTimeRangeMinutes(cls.time);
+                          if (!range) return false;
+                          return range.start === slot.minutes;
+                        });
+
+                        // If this is an empty slot
+                        if (classesAtSlot.length === 0) {
+                          return (
+                            <div
+                              key={cellKey}
+                              className={`border-b border-r last:border-r-0 border-gray-200 px-3 py-3 relative ${
+                                isAlt ? 'bg-white' : 'bg-gray-50'
+                              } min-h-17.5`}
+                            >
                               <div className="h-full text-[11px] text-gray-300 text-center">—</div>
-                            ) : (
-                              (() => {
-                                const range = getTimeRangeMinutes(classAtSlot.time);
-                                const isStartSlot = range ? range.start === slot.minutes : true;
+                            </div>
+                          );
+                        }
 
-                                if (!isStartSlot) {
-                                  return (
-                                    <div className="h-full rounded-md border border-dashed border-blue-200 bg-blue-50/60" />
-                                  );
-                                }
+                        // If this slot has a class starting here
+                        if (classAtSlotStart) {
+                          const range = getTimeRangeMinutes(classAtSlotStart.time);
+                          const durationMinutes = range ? (range.end - range.start) : 30;
+                          const rowCount = Math.ceil(durationMinutes / 30);
+                          const heightPx = (rowCount * 70) - 4; // 70px per row minus border
 
-                                return (
-                                  <div
-                                    key={`${day.day}-${slot.label}-${classAtSlot.id}-${classAtSlot.code}`}
-                                    className="rounded-md border border-gray-200 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04)] p-3"
-                                  >
-                                    <p className="text-sm font-semibold text-gray-900 leading-snug">{classAtSlot.subject}</p>
-                                    <p className="text-xs text-gray-600">{classAtSlot.code}</p>
-                                    <div className="flex items-center gap-2 text-[11px] text-gray-600 mt-2">
-                                      <Clock className="w-3 h-3" />
-                                      <span>{classAtSlot.time}</span>
-                                    </div>
-                                    <div className="flex items-center gap-2 text-[11px] text-gray-600 mt-1">
-                                      <MapPin className="w-3 h-3" />
-                                      <span>{classAtSlot.room}</span>
-                                      <span className="text-gray-400">•</span>
-                                      <span>{classAtSlot.teacher}</span>
-                                    </div>
-                                    <button
-                                      onClick={() => toggleReminder(classAtSlot.code)}
-                                      className={`mt-3 inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-colors ${
-                                        reminders[classAtSlot.code]
-                                          ? 'bg-gray-900 text-white border-gray-900'
-                                          : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100'
-                                      }`}
-                                    >
-                                      <Bell className="w-3 h-3" />
-                                      {reminders[classAtSlot.code] ? 'Reminder On' : 'Set Reminder'}
-                                    </button>
-                                  </div>
-                                );
-                              })()
-                            )}
-                          </div>
-                        );
+                          return (
+                            <div
+                              key={`${day.day}-${slot.label}-${classAtSlotStart.id}`}
+                              className="border-r last:border-r-0 border-gray-200 px-3 py-3 relative"
+                              style={{ gridRow: `span ${rowCount}` }}
+                            >
+                              <div className="rounded-md border border-blue-200 bg-blue-50 shadow-[0_1px_2px_rgba(0,0,0,0.04)] p-3 h-full flex flex-col">
+                                <p className="text-sm font-semibold text-gray-900 leading-snug">{classAtSlotStart.subject}</p>
+                                <p className="text-xs text-gray-600">{classAtSlotStart.code}</p>
+                                <div className="flex items-center gap-2 text-[11px] text-gray-600 mt-2">
+                                  <Clock className="w-3 h-3" />
+                                  <span>{classAtSlotStart.time}</span>
+                                </div>
+                                <div className="flex items-center gap-2 text-[11px] text-gray-600 mt-1">
+                                  <MapPin className="w-3 h-3" />
+                                  <span>{classAtSlotStart.building ? `${classAtSlotStart.room}, ${classAtSlotStart.building}` : classAtSlotStart.room}</span>
+                                </div>
+                                <div className="text-[11px] text-gray-600 mt-1">
+                                  <span>Prof. {classAtSlotStart.teacher}</span>
+                                </div>
+                                <button
+                                  onClick={() => toggleReminder(classAtSlotStart.code)}
+                                  className={`mt-auto inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-colors ${
+                                    reminders[classAtSlotStart.code]
+                                      ? 'bg-gray-900 text-white border-gray-900'
+                                      : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100'
+                                  }`}
+                                >
+                                  <Bell className="w-3 h-3" />
+                                  {reminders[classAtSlotStart.code] ? 'Reminder On' : 'Set Reminder'}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        // This slot is covered by a spanning element above, don't render
+                        return null;
                       })}
                     </Fragment>
                   );
@@ -346,7 +448,7 @@ function Schedule() {
               ) : (
                 <div className="space-y-3">
                   {day.classes.map((cls) => (
-                    <div key={`${day.day}-${cls.id}-${cls.code}`} className="rounded-lg border border-gray-200 p-3 bg-gray-50">
+                    <div key={`${day.day}-${cls.id}-${cls.code}`} className="rounded-lg border border-blue-200 bg-blue-50 p-3">
                       <p className="text-sm font-semibold text-gray-900">{cls.subject}</p>
                       <p className="text-xs text-gray-600">{cls.code}</p>
                       <div className="flex items-center gap-2 text-[11px] text-gray-600 mt-2">
@@ -355,9 +457,10 @@ function Schedule() {
                       </div>
                       <div className="flex items-center gap-2 text-[11px] text-gray-600 mt-1">
                         <MapPin className="w-3 h-3" />
-                        <span>{cls.room}</span>
-                        <span className="text-gray-400">•</span>
-                        <span>{cls.teacher}</span>
+                        <span>{cls.building ? `${cls.room}, ${cls.building}` : cls.room}</span>
+                      </div>
+                      <div className="text-[11px] text-gray-600 mt-1">
+                        <span>Prof. {cls.teacher}</span>
                       </div>
                       <button
                         onClick={() => toggleReminder(cls.code)}
@@ -377,6 +480,8 @@ function Schedule() {
             </div>
           ))}
         </div>
+          </>
+        )}
       </div>
     </div>
   );

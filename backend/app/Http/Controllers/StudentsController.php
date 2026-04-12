@@ -403,7 +403,7 @@ class StudentsController extends Controller
         $classIds = Enrollment::where('student_id', $student->id)
             ->where('status', 'enrolled')
             ->pluck('class_id');
-        
+
         $query = Schedule::whereIn('class_id', $classIds)
             ->with(['class.subject', 'class.teacher', 'class.section']);
         

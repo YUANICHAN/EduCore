@@ -2,7 +2,8 @@ import '../../App.css';
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import Sidebar from '../../Components/Student/Sidebar.jsx';
 import { BookOpen, Clock, Sparkles, Loader2, AlertCircle } from 'lucide-react';
-import enrollmentService from '../../service/enrollmentService';
+import authService from '../../service/authService';
+import studentService from '../../service/studentService';
 
 function Subjects() {
   const [activeItem, setActiveItem] = useState('Subjects');
@@ -14,8 +15,17 @@ function Subjects() {
     setLoading(true);
     setError(null);
     try {
-      const response = await enrollmentService.getAll();
-      const enrollments = response.data || response || [];
+      const profileResponse = await authService.getProfile();
+      const profileUser = profileResponse?.data || profileResponse || {};
+      const student = profileUser.student || profileUser;
+      const studentId = student?.id || profileUser.student_id || profileUser.id;
+
+      if (!studentId) {
+        throw new Error('Student profile is missing an ID.');
+      }
+
+      const response = await studentService.getEnrollments(studentId);
+      const enrollments = response?.data?.data || response?.data || response?.data?.enrollments?.data || response?.enrollments?.data || [];
 
       const asText = (value, fallback = '') => {
         if (value === null || value === undefined) return fallback;
@@ -23,9 +33,10 @@ function Subjects() {
         return fallback;
       };
       
-      // Map enrollments to subject format
+      // Map the student's enrolled classes to subject format
       const subjects = enrollments.map((enrollment, index) => ({
         id: enrollment.id || enrollment.enrollment_id || `${index}`,
+        classCode: asText(enrollment.class?.class_code) || asText(enrollment.class_code) || 'N/A',
         code: asText(enrollment.subject?.subject_code) || asText(enrollment.subject?.code) || asText(enrollment.class?.subject?.subject_code) || asText(enrollment.class?.subject?.code) || asText(enrollment.subject_code) || 'N/A',
         name: asText(enrollment.subject?.subject_name) || asText(enrollment.subject?.name) || asText(enrollment.class?.subject?.subject_name) || asText(enrollment.class?.subject?.name) || asText(enrollment.subject_name) || 'Unknown Subject',
         units: Number(enrollment.subject?.units ?? enrollment.class?.subject?.units ?? enrollment.units ?? 3),
@@ -35,6 +46,10 @@ function Subjects() {
           || (enrollment.class?.teacher?.first_name ? `Prof. ${enrollment.class.teacher.first_name} ${enrollment.class.teacher.last_name}` : null)
           || enrollment.teacher_name 
           || 'TBA',
+        schedule: Array.isArray(enrollment.class?.schedule)
+          ? enrollment.class.schedule.map((slot) => `${slot.day_of_week || ''} ${slot.time_start || ''}-${slot.time_end || ''}`.trim()).filter(Boolean).join(', ')
+          : (typeof enrollment.class?.schedule === 'string' ? enrollment.class.schedule : asText(enrollment.class?.schedule, 'TBA')),
+        section: asText(enrollment.class?.section?.section_code) || asText(enrollment.class?.section?.name) || asText(enrollment.class?.section_code) || 'N/A',
         status: enrollment.status === 'completed' || enrollment.status === 'passed' ? 'Completed' : 'Ongoing',
       }));
       
@@ -135,13 +150,14 @@ function Subjects() {
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Subject</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">Units</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Teacher</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Class</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
                 {enrolledSubjects.length === 0 ? (
                   <tr>
-                    <td colSpan="5" className="px-4 py-8 text-center text-gray-500">
+                    <td colSpan="6" className="px-4 py-8 text-center text-gray-500">
                       No enrolled subjects found
                     </td>
                   </tr>
@@ -152,6 +168,13 @@ function Subjects() {
                       <td className="px-4 py-3 text-sm text-gray-800">{subject.name}</td>
                       <td className="px-4 py-3 text-sm text-gray-700 text-center">{subject.units}</td>
                       <td className="px-4 py-3 text-sm text-gray-700">{subject.teacher}</td>
+                      <td className="px-4 py-3 text-sm text-gray-700">
+                        <div className="space-y-1">
+                          <p className="font-medium text-gray-900">{subject.classCode}</p>
+                          <p className="text-xs text-gray-500">{subject.section}</p>
+                          <p className="text-xs text-gray-500">{subject.schedule}</p>
+                        </div>
+                      </td>
                       <td className="px-4 py-3 text-sm text-center">
                         <span className={statusBadge(subject.status)}>{subject.status}</span>
                       </td>

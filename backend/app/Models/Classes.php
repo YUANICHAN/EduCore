@@ -15,14 +15,12 @@ class Classes extends Model
         'teacher_id',
         'section_id',
         'academic_year_id',
-        'schedule',
         'capacity',
         'enrolled_count',
         'status',
     ];
 
     protected $casts = [
-        'schedule' => 'array',
         'capacity' => 'integer',
         'enrolled_count' => 'integer',
         'created_at' => 'datetime',

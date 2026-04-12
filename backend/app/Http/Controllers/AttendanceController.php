@@ -149,6 +149,7 @@ class AttendanceController extends Controller
         $validated = $request->validate([
             'class_id' => 'required|exists:classes,id',
             'date' => 'required|date',
+            'recorded_by' => 'nullable|exists:users,id',
             'students' => 'required|array|min:1',
             'students.*.student_id' => 'required|exists:students,id',
             'students.*.status' => 'required|in:present,absent,late,excused',
@@ -159,6 +160,14 @@ class AttendanceController extends Controller
 
         $recorded = [];
         $errors = [];
+        $recordedBy = $request->user()?->id ?? ($validated['recorded_by'] ?? null);
+
+        if (!$recordedBy) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unable to identify the user recording attendance.'
+            ], 422);
+        }
 
         foreach ($validated['students'] as $index => $studentData) {
             try {
@@ -173,7 +182,7 @@ class AttendanceController extends Controller
                         'time_in' => $studentData['time_in'] ?? null,
                         'time_out' => $studentData['time_out'] ?? null,
                         'remarks' => $studentData['remarks'] ?? null,
-                        'recorded_by' => $request->user()->id,
+                        'recorded_by' => $recordedBy,
                     ]
                 );
                 $recorded[] = $attendance;
