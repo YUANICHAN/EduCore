@@ -74,11 +74,12 @@ const gradeService = {
 
   /**
    * Get grades by class
-   * @param {number} classId 
+   * @param {number} classId
+   * @param {Object} params
    * @returns {Promise}
    */
-  getByClass: async (classId) => {
-    const response = await api.get(`/grades/class/${classId}`);
+  getByClass: async (classId, params = {}) => {
+    const response = await api.get(`/grades/class/${classId}`, { params });
     return response.data;
   },
 

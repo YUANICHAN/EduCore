@@ -13,6 +13,7 @@ import {
   ChevronDown,
   ChevronRight,
   Shield,
+  LockOpen,
   PanelLeftClose,
   PanelLeftOpen,
   LogOut,
@@ -214,6 +215,7 @@ function Sidebar({ activeItem, setActiveItem }) {
     { name: "Sections", icon: Grid, path: "/admin/sections" },
     { name: "Rooms", icon: Building2, path: "/admin/rooms" },
     { name: "Academic Year", icon: Calendar, path: "/admin/academic-year" },
+    { name: "Grade Locks", icon: LockOpen, path: "/admin/grade-locks" },
     { name: "Reports", icon: FileText, path: "/admin/reports" },
     { name: "Settings", icon: Settings, path: "/admin/settings" },
   ];

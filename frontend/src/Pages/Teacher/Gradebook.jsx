@@ -1,10 +1,11 @@
 import '../../App.css'
-import { Fragment, useState, useMemo, useEffect, useCallback } from 'react';
+import { Fragment, useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Sidebar from '../../Components/Teacher/Sidebar.jsx';
 import gradeService from '../../service/gradeService';
 import classService from '../../service/classService';
 import authService from '../../service/authService';
+import Swal from 'sweetalert2';
 import {
   BookOpen,
   Calculator,
@@ -15,6 +16,8 @@ import {
   ChevronRight,
   AlertTriangle,
   Plus,
+  Pencil,
+  Trash2,
   Loader2,
   AlertCircle,
 } from 'lucide-react';
@@ -54,9 +57,10 @@ function formatReadableDate(dateValue) {
 
 function normalizeTermKey(value) {
   const text = String(value || '').trim().toLowerCase();
-  if (text.includes('prelim') || text.includes('prefi') || text === '1' || text === 'first') return 'prelim';
+  if (text.includes('prelim') || text === '1' || text === 'first') return 'prelim';
   if (text.includes('midterm') || text === '2' || text === 'second') return 'midterm';
-  if (text.includes('final') || text === '3' || text === 'third') return 'finals';
+  if (text.includes('prefinal') || text.includes('pre-final') || text === '3' || text === 'third') return 'prefinals';
+  if (text.includes('final') || text === '4' || text === 'fourth') return 'finals';
   return text;
 }
 
@@ -64,6 +68,7 @@ function termLabelFromKey(value) {
   const key = normalizeTermKey(value);
   if (key === 'prelim') return 'Prelim';
   if (key === 'midterm') return 'Midterm';
+  if (key === 'prefinals') return 'Prefinals';
   if (key === 'finals') return 'Finals';
   return String(value || 'Prelim');
 }
@@ -100,16 +105,69 @@ function extractGradeRowFromResponse(response) {
   return null;
 }
 
+function extractApiErrorMessage(error, fallback) {
+  const validationErrors = error?.response?.data?.errors;
+  if (Array.isArray(validationErrors) && validationErrors.length > 0) {
+    return String(validationErrors[0]);
+  }
+
+  if (validationErrors && typeof validationErrors === 'object') {
+    const firstKey = Object.keys(validationErrors)[0];
+    const firstValue = firstKey ? validationErrors[firstKey] : null;
+    if (Array.isArray(firstValue) && firstValue.length > 0) {
+      return String(firstValue[0]);
+    }
+    if (typeof firstValue === 'string' && firstValue.trim()) {
+      return firstValue;
+    }
+  }
+
+  return error?.response?.data?.message
+    || error?.response?.data?.error
+    || error?.message
+    || fallback;
+}
+
 function getTermKeyFromOpenPeriod(period) {
   if (!period) return '';
   const byName = normalizeTermKey(period.period_name || '');
-  if (byName === 'prelim' || byName === 'midterm' || byName === 'finals') return byName;
+  if (byName === 'prelim' || byName === 'midterm' || byName === 'prefinals' || byName === 'finals') return byName;
 
   const number = Number(period.period_number || 0);
   if (number === 1) return 'prelim';
   if (number === 2) return 'midterm';
-  if (number === 3) return 'finals';
+  if (number === 3) return 'prefinals';
+  if (number === 4) return 'finals';
   return '';
+}
+
+function getTermOrder(termKey) {
+  const normalized = normalizeTermKey(termKey);
+  if (normalized === 'prelim') return 1;
+  if (normalized === 'midterm') return 2;
+  if (normalized === 'prefinals') return 3;
+  if (normalized === 'finals') return 4;
+  return 0;
+}
+
+function canEncodeForTerm(selectedTermKey, openPeriod) {
+  if (!openPeriod) return false;
+
+  const periodName = String(openPeriod.period_name || '').toLowerCase();
+  if (periodName.includes('semester')) {
+    // Semester-level open periods allow encoding across all terms in that semester.
+    return true;
+  }
+
+  const selectedOrder = getTermOrder(selectedTermKey);
+  const openOrder = getTermOrder(getTermKeyFromOpenPeriod(openPeriod));
+
+  if (selectedOrder > 0 && openOrder > 0) {
+    // Allow correction of earlier terms when a later term is already open.
+    return selectedOrder <= openOrder;
+  }
+
+  return false;
 }
 
 function getSemesterWindowForDate(startRaw, endRaw, dateRef = new Date()) {
@@ -147,8 +205,9 @@ function Gradebook() {
   const navigate = useNavigate();
   const [activeItem, setActiveItem] = useState('Gradebook');
   const currentYear = '2024-2025'; // Automatically set to current AY
-  const termOptions = ['Prelim','Midterm','Prefi','Finals'];
+  const termOptions = ['Prelim', 'Midterm', 'Prefinals', 'Finals'];
   const [selectedTerm, setSelectedTerm] = useState(termOptions[0]);
+  const selectedTermKey = useMemo(() => normalizeTermKey(selectedTerm), [selectedTerm]);
   const [openGradingPeriod, setOpenGradingPeriod] = useState(null);
   const [isLocked, setIsLocked] = useState(false);
 
@@ -156,6 +215,7 @@ function Gradebook() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [bulkFilling, setBulkFilling] = useState(false);
 
   // Subjects assigned to teacher
   const [subjects, setSubjects] = useState([]);
@@ -190,6 +250,7 @@ function Gradebook() {
   const [cellSaveStatus, setCellSaveStatus] = useState({});
   const [customComponents, setCustomComponents] = useState([]);
   const [hiddenBaseComponents, setHiddenBaseComponents] = useState([]);
+  const gradeShortcutRef = useRef({ pending: false, timerId: null });
 
   const tableComponentDefs = useMemo(() => {
     const visibleBase = GRADE_COMPONENTS.filter((component) => !hiddenBaseComponents.includes(component.key));
@@ -251,7 +312,7 @@ function Gradebook() {
     try {
       const [studentsRes, gradesRes, schemeRes] = await Promise.all([
         classService.getStudents(selectedSubjectId, { status: 'enrolled', per_page: 1000 }),
-        gradeService.getByClass(selectedSubjectId),
+        gradeService.getByClass(selectedSubjectId, { all: 1, per_page: 5000 }),
         classService.getGradingScheme(selectedSubjectId).catch(() => null),
       ]);
 
@@ -299,6 +360,7 @@ function Gradebook() {
       };
       const seenAssessmentIds = new Set();
       const nextGradeRecordMap = {};
+      const lockedTermSet = new Set();
 
       grades.forEach((g) => {
         const student = studentsData.find((s) => Number(s.id) === Number(g.student_id));
@@ -338,6 +400,10 @@ function Gradebook() {
           maxScore,
           gradingPeriod: normalizeTermKey(g.grading_period || selectedTerm),
         };
+
+        if (Boolean(g.is_locked)) {
+          lockedTermSet.add(normalizeTermKey(g.grading_period || selectedTerm));
+        }
       });
 
       const schemeResponse = (schemeRes && (schemeRes.data || schemeRes)) || null;
@@ -401,16 +467,18 @@ function Gradebook() {
       setEnrollmentByStudent(enrollmentMap);
       setGradeRecordMap(nextGradeRecordMap);
       setStudents(studentsData);
+      setIsLocked(lockedTermSet.has(selectedTermKey));
     } catch (err) {
       console.error('Error fetching grades:', err);
       // No fallback - show empty state
       setStudents([]);
       setEnrollmentByStudent({});
       setGradeRecordMap({});
+      setIsLocked(false);
     } finally {
       setLoading(false);
     }
-  }, [selectedSubjectId, selectedTerm]);
+  }, [selectedSubjectId, selectedTerm, selectedTermKey]);
 
   const fetchOpenGradingPeriod = useCallback(async () => {
     try {
@@ -470,7 +538,6 @@ function Gradebook() {
     return { canEncode: true, message: '' };
   }, [selectedSubject]);
 
-  const selectedTermKey = useMemo(() => normalizeTermKey(selectedTerm), [selectedTerm]);
   const openPeriodTermKey = useMemo(() => getTermKeyFromOpenPeriod(openGradingPeriod), [openGradingPeriod]);
 
   const periodWindowStatus = useMemo(() => {
@@ -482,10 +549,11 @@ function Gradebook() {
       };
     }
 
-    if (!openPeriodTermKey || openPeriodTermKey !== selectedTermKey) {
+    if (!canEncodeForTerm(selectedTermKey, openGradingPeriod)) {
+      const openTermLabel = termLabelFromKey(openPeriodTermKey || openGradingPeriod.period_name || 'current period');
       return {
         open: false,
-        message: `Grades can only be entered during ${openGradingPeriod.period_name || 'the currently open period'}.`,
+        message: `Only ${openTermLabel} and earlier terms can be edited right now.`,
       };
     }
 
@@ -651,7 +719,7 @@ function Gradebook() {
       }, 1500);
     } catch (err) {
       console.error('Error saving grade:', err);
-      setError('Failed to save grade to database. Please try again.');
+      setError(extractApiErrorMessage(err, 'Failed to save grade to database. Please try again.'));
       setCellSaveStatus((prev) => ({ ...prev, [cellKey]: 'failed' }));
     }
   };
@@ -663,6 +731,15 @@ function Gradebook() {
 
   const handleWeightChange = (key, value) => {
     setWeightDraft(prev => ({ ...prev, [key]: value }));
+  };
+
+  const handleWeightFocus = (key, event) => {
+    if (String(weightDraft[key] ?? '').trim() === '0') {
+      event.target.value = '';
+      setWeightDraft(prev => ({ ...prev, [key]: '' }));
+    } else {
+      event.target.select();
+    }
   };
 
   const weightDraftTotal = useMemo(() => {
@@ -731,7 +808,7 @@ function Gradebook() {
       });
     } catch (err) {
       console.error('Error saving grading scheme:', err);
-      alert('Failed to save grading weights. Please try again.');
+      alert(extractApiErrorMessage(err, 'Failed to save grading weights. Please try again.'));
     } finally {
       setSavingWeights(false);
     }
@@ -803,28 +880,191 @@ function Gradebook() {
     win.close();
   };
 
+  const persistVisibleTermGrades = useCallback(async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const payload = [];
+    const currentUser = authService.getCurrentUser();
+    const recordedBy = Number(currentUser?.teacher_id || 0) || null;
+
+    students.forEach((student) => {
+      const enrollmentId = enrollmentByStudent[student.id] || null;
+      if (!enrollmentId) return;
+
+      tableComponentDefs.forEach((component) => {
+        visibleAssessments(component.key).forEach((assessment) => {
+          const rawScore = student.scores?.[component.key]?.[assessment.id];
+          const hasScoreValue = rawScore !== null && rawScore !== undefined && rawScore !== '';
+          const numericScore = Number(rawScore || 0);
+          const cellKey = `${student.id}|${assessment.id}`;
+          const hasExistingRecord = Boolean(gradeRecordMap[cellKey]?.id);
+
+          // Avoid creating empty zero-grade rows that were never encoded.
+          if (!hasExistingRecord && (!hasScoreValue || numericScore <= 0)) {
+            return;
+          }
+
+          payload.push({
+            enrollment_id: enrollmentId,
+            student_id: student.id,
+            class_id: selectedSubjectId,
+            grading_period: selectedTermKey,
+            component_type: mapComponentKeyToBackendType(component.key),
+            component_name: assessment.name,
+            score: Math.max(0, numericScore),
+            max_score: Number(assessment.max || 0),
+            percentage_weight: Number(weights?.[component.key] || 0),
+            date_recorded: today,
+            ...(recordedBy ? { recorded_by: recordedBy } : {}),
+          });
+        });
+      });
+    });
+
+    if (payload.length === 0) {
+      return { savedCount: 0, hasRowsToLock: false };
+    }
+
+    const bulkResponse = await gradeService.bulkCreate(payload);
+    const savedGrades = Array.isArray(bulkResponse?.data)
+      ? bulkResponse.data
+      : (Array.isArray(bulkResponse) ? bulkResponse : []);
+
+    if (savedGrades.length > 0) {
+      const nextMap = {};
+      savedGrades.forEach((gradeRow) => {
+        const componentKey = normalizeComponentKey(gradeRow.component_type || gradeRow.component || '');
+        const studentId = Number(gradeRow.student_id);
+        const maxScore = Number(gradeRow.max_score || 0);
+        if (!componentKey || Number.isNaN(studentId)) return;
+
+        const assessmentId = buildAssessmentId(
+          componentKey,
+          termLabelFromKey(gradeRow.grading_period || selectedTermKey),
+          gradeRow.component_name,
+          maxScore
+        );
+
+        nextMap[`${studentId}|${assessmentId}`] = {
+          id: gradeRow.id,
+          enrollmentId: gradeRow.enrollment_id,
+          componentKey,
+          componentName: gradeRow.component_name,
+          maxScore,
+          gradingPeriod: normalizeTermKey(gradeRow.grading_period),
+        };
+      });
+
+      if (Object.keys(nextMap).length > 0) {
+        setGradeRecordMap((prev) => ({ ...prev, ...nextMap }));
+      }
+    }
+
+    return { savedCount: savedGrades.length || payload.length, hasRowsToLock: true };
+  }, [enrollmentByStudent, gradeRecordMap, selectedSubjectId, selectedTermKey, students, tableComponentDefs, visibleAssessments, weights]);
+
   const submitGrades = async () => {
     if (!semesterEncodingStatus.canEncode) {
-      alert(semesterEncodingStatus.message || 'Grade entry is not available for this semester.');
+      const warningMessage = semesterEncodingStatus.message || 'Grade entry is not available for this semester.';
+      setError(warningMessage);
+      await Swal.fire({
+        icon: 'warning',
+        title: 'Cannot Submit Grades',
+        text: warningMessage,
+      });
       return;
     }
 
     if (!periodWindowStatus.open) {
-      alert(periodWindowStatus.message || 'Grade entry is not available for this grading period.');
+      const warningMessage = periodWindowStatus.message || 'Grade entry is not available for this grading period.';
+      setError(warningMessage);
+      await Swal.fire({
+        icon: 'warning',
+        title: 'Cannot Submit Grades',
+        text: warningMessage,
+      });
+      return;
+    }
+
+    const confirm = await Swal.fire({
+      title: 'Submit and Lock Grades?',
+      text: 'This will lock the current grading period for this class. You will no longer be able to edit these grades unless unlocked by admin.',
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonText: 'Yes, Submit & Lock',
+      cancelButtonText: 'Cancel',
+      confirmButtonColor: '#2563eb',
+    });
+
+    if (!confirm.isConfirmed) {
       return;
     }
     
     setSaving(true);
+    setError(null);
     try {
+      const { hasRowsToLock } = await persistVisibleTermGrades();
+      if (!hasRowsToLock) {
+        const warningMessage = `No saved scores were found for ${selectedTerm}. Enter at least one score first.`;
+        setError(warningMessage);
+        await Swal.fire({
+          icon: 'warning',
+          title: 'No Grades To Submit',
+          text: warningMessage,
+        });
+        return;
+      }
+
       // Lock grades for this grading period
-      await gradeService.lockByPeriod({
+      const lockResponse = await gradeService.lockByPeriod({
         class_id: selectedSubjectId,
         grading_period: selectedTermKey,
       });
+
+      const lockedCount = Number(lockResponse?.locked_count ?? 0);
+      if (!Number.isFinite(lockedCount) || lockedCount <= 0) {
+        const warningMessage = lockResponse?.message || 'No grade rows were locked for this term.';
+        setError(warningMessage);
+        await Swal.fire({
+          icon: 'warning',
+          title: 'Lock not applied',
+          text: warningMessage,
+        });
+        return;
+      }
+
       setIsLocked(true);
+      await fetchGrades();
+      setError(null);
+
+      await Swal.fire({
+        icon: 'success',
+        title: 'Grades Locked Successfully',
+        text: `Grades for ${selectedTerm} are now submitted and locked.`,
+        confirmButtonColor: '#16a34a',
+      });
     } catch (err) {
       console.error('Error locking grades:', err);
-      alert('Failed to submit grades. Please try again.');
+      const backendMessage = extractApiErrorMessage(err, 'Failed to submit grades. Please try again.');
+      setError(backendMessage);
+      const missingTeacherSession =
+        err?.code === 'MISSING_TEACHER_ID'
+        || /teacher_id|missing teacher|unauthenticated|unauthorized|session/i.test(String(backendMessage));
+
+      if (missingTeacherSession) {
+        await Swal.fire({
+          icon: 'warning',
+          title: 'Session expired',
+          text: 'Your teacher session appears to be missing or expired. Please log out, log in again, then submit and lock grades.',
+          confirmButtonColor: '#f59e0b',
+        });
+        return;
+      }
+
+      await Swal.fire({
+        icon: 'error',
+        title: 'Submit Failed',
+        text: backendMessage,
+      });
     } finally {
       setSaving(false);
     }
@@ -859,6 +1099,517 @@ function Gradebook() {
     })));
     setShowAddForm(prev => ({ ...prev, [component]: false }));
   };
+
+  const deleteScoreEntry = async (studentId, componentKey, assessmentId) => {
+    if (!canEdit) return;
+
+    const recordKey = `${studentId}|${assessmentId}`;
+    const existingRecord = gradeRecordMap[recordKey];
+
+    const confirm = await Swal.fire({
+      title: 'Clear this score?',
+      text: 'This will remove the saved score for this cell.',
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Yes, clear it',
+      cancelButtonText: 'Cancel',
+      confirmButtonColor: '#dc2626',
+    });
+
+    if (!confirm.isConfirmed) return;
+
+    setCellSaveStatus((prev) => ({ ...prev, [recordKey]: 'saving' }));
+
+    try {
+      if (existingRecord?.id) {
+        await gradeService.delete(existingRecord.id);
+      }
+
+      setStudents((prev) => prev.map((student) => {
+        if (student.id !== studentId) return student;
+        return {
+          ...student,
+          scores: {
+            ...(student.scores || {}),
+            [componentKey]: {
+              ...((student.scores || {})[componentKey] || {}),
+              [assessmentId]: '',
+            },
+          },
+        };
+      }));
+
+      setGradeRecordMap((prev) => {
+        if (!prev[recordKey]) return prev;
+        const next = { ...prev };
+        delete next[recordKey];
+        return next;
+      });
+
+      setCellSaveStatus((prev) => ({ ...prev, [recordKey]: 'saved' }));
+      window.setTimeout(() => {
+        setCellSaveStatus((prev) => {
+          const next = { ...prev };
+          if (next[recordKey] === 'saved') delete next[recordKey];
+          return next;
+        });
+      }, 1200);
+    } catch (err) {
+      console.error('Failed to delete score:', err);
+      setCellSaveStatus((prev) => ({ ...prev, [recordKey]: 'failed' }));
+      await Swal.fire({
+        icon: 'error',
+        title: 'Clear failed',
+        text: err?.response?.data?.message || 'Unable to clear this score right now.',
+      });
+    }
+  };
+
+  const removeAssessment = async (componentKey, assessment) => {
+    if (!canEdit) return;
+
+    const confirm = await Swal.fire({
+      title: 'Remove assessment?',
+      text: `This will delete ${assessment.name} and its saved scores for ${selectedTerm}.`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Yes, remove it',
+      cancelButtonText: 'Cancel',
+      confirmButtonColor: '#dc2626',
+    });
+
+    if (!confirm.isConfirmed) return;
+
+    try {
+      const idsToDelete = Object.entries(gradeRecordMap)
+        .filter(([, record]) => {
+          return record.componentKey === componentKey
+            && String(record.componentName || '').trim() === String(assessment.name || '').trim()
+            && Number(record.maxScore || 0) === Number(assessment.max || 0)
+            && normalizeTermKey(record.gradingPeriod) === selectedTermKey;
+        })
+        .map(([, record]) => record.id)
+        .filter(Boolean);
+
+      if (idsToDelete.length > 0) {
+        await Promise.allSettled(idsToDelete.map((id) => gradeService.delete(id)));
+      }
+
+      setAssessments((prev) => ({
+        ...prev,
+        [componentKey]: (prev[componentKey] || []).filter((item) => item.id !== assessment.id),
+      }));
+
+      setStudents((prev) => prev.map((student) => {
+        const currentComponentScores = (student.scores || {})[componentKey] || {};
+        if (!(assessment.id in currentComponentScores)) return student;
+
+        const nextComponentScores = { ...currentComponentScores };
+        delete nextComponentScores[assessment.id];
+
+        return {
+          ...student,
+          scores: {
+            ...(student.scores || {}),
+            [componentKey]: nextComponentScores,
+          },
+        };
+      }));
+
+      setGradeRecordMap((prev) => {
+        const next = { ...prev };
+        Object.keys(next).forEach((key) => {
+          if (key.endsWith(`|${assessment.id}`)) {
+            delete next[key];
+          }
+        });
+        return next;
+      });
+
+      await Swal.fire({
+        icon: 'success',
+        title: 'Assessment removed',
+        text: `${assessment.name} was removed successfully.`,
+        confirmButtonColor: '#16a34a',
+      });
+    } catch (err) {
+      console.error('Failed to remove assessment:', err);
+      await Swal.fire({
+        icon: 'error',
+        title: 'Remove failed',
+        text: err?.response?.data?.message || 'Unable to remove this assessment.',
+      });
+    }
+  };
+
+  const editAssessmentMax = async (componentKey, assessment) => {
+    if (!canEdit) return;
+
+    const currentMax = Number(assessment.max || 0);
+    const currentHighestScore = students.reduce((max, student) => {
+      const score = Number(student.scores?.[componentKey]?.[assessment.id] || 0);
+      return Math.max(max, score);
+    }, 0);
+
+    const result = await Swal.fire({
+      title: `Edit max score for ${assessment.name}`,
+      input: 'number',
+      inputValue: currentMax,
+      inputAttributes: {
+        min: String(Math.max(1, Math.ceil(currentHighestScore))),
+        step: '1',
+      },
+      showCancelButton: true,
+      confirmButtonText: 'Save',
+      cancelButtonText: 'Cancel',
+      preConfirm: (value) => {
+        const nextMax = Number(value);
+        if (Number.isNaN(nextMax) || nextMax <= 0) {
+          Swal.showValidationMessage('Please enter a valid max score greater than 0.');
+          return false;
+        }
+
+        if (nextMax < currentHighestScore) {
+          Swal.showValidationMessage(`Max score cannot be lower than the highest current score (${currentHighestScore}).`);
+          return false;
+        }
+
+        return nextMax;
+      },
+    });
+
+    if (!result.isConfirmed) return;
+
+    const nextMax = Number(result.value);
+    if (nextMax === currentMax) return;
+
+    const nextAssessmentId = buildAssessmentId(
+      componentKey,
+      termLabelFromKey(assessment.term || selectedTermKey),
+      assessment.name,
+      nextMax
+    );
+
+    setAssessments((prev) => ({
+      ...prev,
+      [componentKey]: (prev[componentKey] || []).map((item) => {
+        if (item.id !== assessment.id) return item;
+        return {
+          ...item,
+          id: nextAssessmentId,
+          max: nextMax,
+        };
+      }),
+    }));
+
+    setStudents((prev) => prev.map((student) => {
+      const componentScores = student.scores?.[componentKey] || {};
+      if (!(assessment.id in componentScores)) return student;
+
+      const nextComponentScores = { ...componentScores };
+      const existingScore = Number(nextComponentScores[assessment.id] || 0);
+      delete nextComponentScores[assessment.id];
+      nextComponentScores[nextAssessmentId] = Math.max(0, Math.min(nextMax, existingScore));
+
+      return {
+        ...student,
+        scores: {
+          ...(student.scores || {}),
+          [componentKey]: nextComponentScores,
+        },
+      };
+    }));
+
+    setCellSaveStatus((prev) => {
+      const next = {};
+      Object.entries(prev).forEach(([key, value]) => {
+        if (key.endsWith(`|${assessment.id}`)) {
+          const studentId = key.split('|')[0];
+          next[`${studentId}|${nextAssessmentId}`] = value;
+        } else {
+          next[key] = value;
+        }
+      });
+      return next;
+    });
+
+    const affectedRecords = [];
+    setGradeRecordMap((prev) => {
+      const next = {};
+
+      Object.entries(prev).forEach(([key, record]) => {
+        if (key.endsWith(`|${assessment.id}`)) {
+          const studentId = key.split('|')[0];
+          const remapped = {
+            ...record,
+            maxScore: nextMax,
+          };
+          next[`${studentId}|${nextAssessmentId}`] = remapped;
+          if (remapped?.id) {
+            affectedRecords.push(remapped.id);
+          }
+        } else {
+          next[key] = record;
+        }
+      });
+
+      return next;
+    });
+
+    try {
+      if (affectedRecords.length > 0) {
+        await Promise.allSettled(
+          affectedRecords.map((recordId) => gradeService.update(recordId, { max_score: nextMax }))
+        );
+      }
+
+      await Swal.fire({
+        icon: 'success',
+        title: 'Max score updated',
+        text: `${assessment.name} is now out of ${nextMax}.`,
+        confirmButtonColor: '#16a34a',
+      });
+    } catch (err) {
+      console.error('Failed to persist max score update:', err);
+      await Swal.fire({
+        icon: 'error',
+        title: 'Update failed',
+        text: err?.response?.data?.message || 'Unable to update max score in database.',
+      });
+    }
+  };
+
+  const fillRandomScoresForVisibleTerm = useCallback(async () => {
+    if (!selectedSubjectId) return;
+    if (!canEdit) {
+      alert('Gradebook is currently locked for editing.');
+      return;
+    }
+
+    setBulkFilling(true);
+
+    let randomizedTargets = [];
+
+    try {
+      const targets = [];
+      students.forEach((student) => {
+        tableComponentDefs.forEach((component) => {
+          visibleAssessments(component.key).forEach((assessment) => {
+            targets.push({
+              studentId: student.id,
+              componentKey: component.key,
+              assessmentId: assessment.id,
+              maxScore: Number(assessment.max || 100),
+            });
+          });
+        });
+      });
+
+      if (targets.length === 0) {
+        alert(`No visible assessments found for ${selectedTerm}.`);
+        return;
+      }
+
+      randomizedTargets = targets.map((target) => {
+        const maxScore = Math.max(0, Number(target.maxScore || 0));
+        const minScore = maxScore > 0 ? Math.ceil(maxScore * 0.6) : 0;
+        return {
+          ...target,
+          maxScore,
+          randomScore: Math.floor(Math.random() * (maxScore - minScore + 1)) + minScore,
+        };
+      });
+
+      setStudents((prev) => prev.map((student) => {
+        const updatedScores = { ...(student.scores || {}) };
+
+        randomizedTargets.forEach((target) => {
+          if (student.id !== target.studentId) return;
+          updatedScores[target.componentKey] = {
+            ...(updatedScores[target.componentKey] || {}),
+            [target.assessmentId]: target.randomScore,
+          };
+        });
+
+        return {
+          ...student,
+          scores: updatedScores,
+        };
+      }));
+
+      setCellSaveStatus((prev) => {
+        const next = { ...prev };
+        randomizedTargets.forEach((target) => {
+          next[`${target.studentId}|${target.assessmentId}`] = 'saving';
+        });
+        return next;
+      });
+
+      const currentUser = authService.getCurrentUser();
+      const recordedBy = currentUser?.teacher_id ?? currentUser?.id ?? null;
+      if (!recordedBy) {
+        throw new Error('Missing teacher reference for grade recording.');
+      }
+
+      const assessmentLookup = {};
+      tableComponentDefs.forEach((component) => {
+        visibleAssessments(component.key).forEach((assessment) => {
+          assessmentLookup[`${component.key}|${assessment.id}`] = assessment;
+        });
+      });
+
+      const bulkPayload = randomizedTargets.map((target) => {
+        const enrollmentId = enrollmentByStudent[target.studentId] || null;
+        const assessment = assessmentLookup[`${target.componentKey}|${target.assessmentId}`];
+        if (!enrollmentId || !assessment) {
+          throw new Error('Missing enrollment or assessment reference.');
+        }
+
+        return {
+          enrollment_id: enrollmentId,
+          student_id: target.studentId,
+          class_id: selectedSubjectId,
+          grading_period: selectedTermKey,
+          component_type: mapComponentKeyToBackendType(target.componentKey),
+          component_name: assessment.name,
+          score: target.randomScore,
+          max_score: target.maxScore,
+          percentage_weight: Number(weights?.[target.componentKey] || 0),
+          date_recorded: new Date().toISOString().slice(0, 10),
+          recorded_by: recordedBy,
+        };
+      });
+
+      const bulkResponse = await gradeService.bulkCreate(bulkPayload);
+      const savedGrades = Array.isArray(bulkResponse?.data) ? bulkResponse.data : [];
+
+      if (savedGrades.length > 0) {
+        const updateMap = {};
+        savedGrades.forEach((gradeRow) => {
+          const componentKey = normalizeComponentKey(gradeRow.component_type || gradeRow.component || '');
+          const assessment = (assessments[componentKey] || []).find((item) => item.name === gradeRow.component_name && normalizeTermKey(item.term) === normalizeTermKey(gradeRow.grading_period));
+          const studentId = Number(gradeRow.student_id);
+          if (!componentKey || !assessment || Number.isNaN(studentId)) return;
+          const recordKey = `${studentId}|${assessment.id}`;
+          updateMap[recordKey] = {
+            id: gradeRow.id,
+            enrollmentId: gradeRow.enrollment_id,
+            componentKey,
+            componentName: gradeRow.component_name,
+            maxScore: Number(gradeRow.max_score || assessment.max || 0),
+            gradingPeriod: normalizeTermKey(gradeRow.grading_period),
+          };
+        });
+
+        if (Object.keys(updateMap).length > 0) {
+          setGradeRecordMap((prev) => ({ ...prev, ...updateMap }));
+        }
+      }
+
+      setCellSaveStatus((prev) => {
+        const next = { ...prev };
+        randomizedTargets.forEach((target) => {
+          next[`${target.studentId}|${target.assessmentId}`] = 'saved';
+        });
+        return next;
+      });
+
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'success',
+        title: `Saved ${randomizedTargets.length} randomized scores`,
+        showConfirmButton: false,
+        timer: 1400,
+        timerProgressBar: true,
+      });
+
+      window.setTimeout(() => {
+        setCellSaveStatus((prev) => {
+          const next = { ...prev };
+          randomizedTargets.forEach((target) => {
+            const key = `${target.studentId}|${target.assessmentId}`;
+            if (next[key] === 'saved') delete next[key];
+          });
+          return next;
+        });
+      }, 1500);
+    } catch (err) {
+      console.error('Bulk random fill failed:', err);
+      const errorMessage = extractApiErrorMessage(err, 'Failed to save randomized grades. Please try again.');
+      setError(errorMessage);
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'error',
+        title: errorMessage,
+        showConfirmButton: false,
+        timer: 2500,
+        timerProgressBar: true,
+      });
+      setCellSaveStatus((prev) => {
+        const next = { ...prev };
+        randomizedTargets.forEach((target) => {
+          next[`${target.studentId}|${target.assessmentId}`] = 'failed';
+        });
+        return next;
+      });
+    } finally {
+      setBulkFilling(false);
+    }
+  }, [assessments, canEdit, enrollmentByStudent, selectedSubjectId, selectedTerm, selectedTermKey, setCellSaveStatus, setGradeRecordMap, setStudents, students, tableComponentDefs, visibleAssessments, weights]);
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      const activeTag = document.activeElement?.tagName?.toLowerCase();
+      const activeType = String(document.activeElement?.type || '').toLowerCase();
+      const isTextInput = activeTag === 'input' && !['number', 'range', 'date', 'time', 'month', 'week', 'datetime-local'].includes(activeType);
+      const isTypingElement = isTextInput || activeTag === 'textarea' || activeTag === 'select' || document.activeElement?.isContentEditable;
+
+      if (isTypingElement) return;
+
+      const isShift1 = event.shiftKey && (event.code === 'Digit1' || event.key === '!');
+      const isShift4 = event.shiftKey && (event.code === 'Digit4' || event.key === '$');
+      const isPlain4 = event.code === 'Digit4' || event.key === '4' || event.key === '$';
+
+      if (isShift4) {
+        event.preventDefault();
+        fillRandomScoresForVisibleTerm();
+        return;
+      }
+
+      if (gradeShortcutRef.current.pending && isPlain4) {
+        event.preventDefault();
+        if (gradeShortcutRef.current.timerId) {
+          window.clearTimeout(gradeShortcutRef.current.timerId);
+        }
+        gradeShortcutRef.current.pending = false;
+        gradeShortcutRef.current.timerId = null;
+        fillRandomScoresForVisibleTerm();
+        return;
+      }
+
+      if (isShift1) {
+        event.preventDefault();
+        if (gradeShortcutRef.current.timerId) {
+          window.clearTimeout(gradeShortcutRef.current.timerId);
+        }
+        gradeShortcutRef.current.pending = true;
+        gradeShortcutRef.current.timerId = window.setTimeout(() => {
+          gradeShortcutRef.current.pending = false;
+          gradeShortcutRef.current.timerId = null;
+        }, 1500);
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      if (gradeShortcutRef.current.timerId) {
+        window.clearTimeout(gradeShortcutRef.current.timerId);
+      }
+    };
+  }, [fillRandomScoresForVisibleTerm]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-gray-50">
@@ -977,11 +1728,11 @@ function Gradebook() {
             <div className="flex flex-wrap gap-3 mb-6">
               <button
                 onClick={submitGrades}
-                disabled={!canEdit}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${canEdit ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-200 text-gray-500 cursor-not-allowed'}`}
+                disabled={!canEdit || saving}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${canEdit && !saving ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-200 text-gray-500 cursor-not-allowed'}`}
               >
                 {isLocked ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
-                {isLocked ? 'Locked' : 'Submit & Lock Grades'}
+                {saving ? 'Submitting...' : (isLocked ? 'Locked' : 'Submit & Lock Grades')}
               </button>
               <button onClick={exportCSV} className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200">
                 <Download className="w-4 h-4" /> Export CSV
@@ -992,7 +1743,10 @@ function Gradebook() {
             </div>
 
             {/* Weights */}
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+            <div
+              className="grid gap-4 mb-6"
+              style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}
+            >
               {!hiddenBaseComponents.includes('quizzes') && <div className="bg-white p-5 rounded-lg border border-gray-200 shadow-sm flex items-center justify-between">
                 <div>
                   <p className="text-sm text-gray-600">Quizzes Weight</p>
@@ -1004,7 +1758,7 @@ function Gradebook() {
                       step="0.01"
                       value={weightDraft.quizzes}
                       onChange={(e) => handleWeightChange('quizzes', e.target.value)}
-                      onFocus={(e) => e.target.select()}
+                      onFocus={(e) => handleWeightFocus('quizzes', e)}
                       disabled={!canEdit || savingWeights}
                       className={`w-24 px-2 py-1 border rounded text-sm font-semibold ${canEdit ? 'border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500' : 'bg-gray-100 border-gray-200 text-gray-500'}`}
                     />
@@ -1026,7 +1780,7 @@ function Gradebook() {
                       step="0.01"
                       value={weightDraft.exams}
                       onChange={(e) => handleWeightChange('exams', e.target.value)}
-                      onFocus={(e) => e.target.select()}
+                      onFocus={(e) => handleWeightFocus('exams', e)}
                       disabled={!canEdit || savingWeights}
                       className={`w-24 px-2 py-1 border rounded text-sm font-semibold ${canEdit ? 'border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500' : 'bg-gray-100 border-gray-200 text-gray-500'}`}
                     />
@@ -1048,7 +1802,7 @@ function Gradebook() {
                       step="0.01"
                       value={weightDraft.projects}
                       onChange={(e) => handleWeightChange('projects', e.target.value)}
-                      onFocus={(e) => e.target.select()}
+                      onFocus={(e) => handleWeightFocus('projects', e)}
                       disabled={!canEdit || savingWeights}
                       className={`w-24 px-2 py-1 border rounded text-sm font-semibold ${canEdit ? 'border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500' : 'bg-gray-100 border-gray-200 text-gray-500'}`}
                     />
@@ -1070,7 +1824,7 @@ function Gradebook() {
                       step="0.01"
                       value={weightDraft.attendance}
                       onChange={(e) => handleWeightChange('attendance', e.target.value)}
-                      onFocus={(e) => e.target.select()}
+                      onFocus={(e) => handleWeightFocus('attendance', e)}
                       disabled={!canEdit || savingWeights}
                       className={`w-24 px-2 py-1 border rounded text-sm font-semibold ${canEdit ? 'border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500' : 'bg-gray-100 border-gray-200 text-gray-500'}`}
                     />
@@ -1092,7 +1846,7 @@ function Gradebook() {
                       step="0.01"
                       value={weightDraft.performance_task}
                       onChange={(e) => handleWeightChange('performance_task', e.target.value)}
-                      onFocus={(e) => e.target.select()}
+                      onFocus={(e) => handleWeightFocus('performance_task', e)}
                       disabled={!canEdit || savingWeights}
                       className={`w-24 px-2 py-1 border rounded text-sm font-semibold ${canEdit ? 'border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500' : 'bg-gray-100 border-gray-200 text-gray-500'}`}
                     />
@@ -1114,7 +1868,7 @@ function Gradebook() {
                       step="0.01"
                       value={weightDraft.activity_task}
                       onChange={(e) => handleWeightChange('activity_task', e.target.value)}
-                      onFocus={(e) => e.target.select()}
+                      onFocus={(e) => handleWeightFocus('activity_task', e)}
                       disabled={!canEdit || savingWeights}
                       className={`w-24 px-2 py-1 border rounded text-sm font-semibold ${canEdit ? 'border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500' : 'bg-gray-100 border-gray-200 text-gray-500'}`}
                     />
@@ -1137,7 +1891,7 @@ function Gradebook() {
                         step="0.01"
                         value={weightDraft[component.key] ?? String(component.weight ?? 0)}
                         onChange={(e) => handleWeightChange(component.key, e.target.value)}
-                        onFocus={(e) => e.target.select()}
+                        onFocus={(e) => handleWeightFocus(component.key, e)}
                         disabled={!canEdit || savingWeights}
                         className={`w-24 px-2 py-1 border rounded text-sm font-semibold ${canEdit ? 'border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500' : 'bg-gray-100 border-gray-200 text-gray-500'}`}
                       />
@@ -1259,7 +2013,31 @@ function Gradebook() {
                         <Fragment key={`sub-${component.key}`}>
                           <th key={`${component.key}-pct`} className="py-2 px-4">%</th>
                           {visibleAssessments(component.key).map((a, idx) => (
-                            <th key={a.id} className={`py-2 px-4 ${idx === visibleAssessments(component.key).length - 1 ? 'border-r-2 border-gray-300' : ''}`}>{a.name}</th>
+                            <th key={a.id} className={`py-2 px-4 ${idx === visibleAssessments(component.key).length - 1 ? 'border-r-2 border-gray-300' : ''}`}>
+                              <div className="flex items-center justify-between gap-2">
+                                <span>{a.name} / {a.max}</span>
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => editAssessmentMax(component.key, a)}
+                                    disabled={!canEdit}
+                                    className={`p-1 rounded ${canEdit ? 'text-amber-600 hover:bg-amber-50' : 'text-gray-400 cursor-not-allowed'}`}
+                                    title="Edit max score"
+                                  >
+                                    <Pencil className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeAssessment(component.key, a)}
+                                    disabled={!canEdit}
+                                    className={`p-1 rounded ${canEdit ? 'text-rose-600 hover:bg-rose-50' : 'text-gray-400 cursor-not-allowed'}`}
+                                    title="Remove assessment"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            </th>
                           ))}
                         </Fragment>
                       ))}
@@ -1300,7 +2078,6 @@ function Gradebook() {
                                 disabled={!canEdit}
                                 className={`w-24 px-2 py-1 border rounded text-sm ${canEdit ? 'border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500' : 'bg-gray-100 border-gray-200 text-gray-500'}`}
                               />
-                              <span className="text-xs text-gray-600">/ {a.max}</span>
                               </div>
                               {(() => {
                                 const status = cellSaveStatus[`${s.id}|${a.id}`];

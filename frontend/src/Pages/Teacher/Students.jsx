@@ -16,7 +16,6 @@ import {
 } from 'lucide-react';
 import { ChevronRight } from 'lucide-react';
 import classService from '../../service/classService';
-import studentService from '../../service/studentService';
 import authService from '../../service/authService';
 
 // No fallback data - use real data or empty arrays
@@ -33,6 +32,8 @@ function TeacherStudents() {
   const [selectedStudentId, setSelectedStudentId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [classData, setClassData] = useState([]);
+  const [studentCache, setStudentCache] = useState({});
+  const [selectedClassStudentsLoading, setSelectedClassStudentsLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const navigate = useNavigate();
@@ -56,48 +57,18 @@ function TeacherStudents() {
         return fallback;
       };
       
-      // Fetch students for each class
-      const classesWithStudents = await Promise.all(
-        classes.map(async (cls) => {
-          let students = [];
-          try {
-            const studentsResponse = await classService.getStudents(cls.id, { status: 'enrolled', per_page: 1000 });
-            const studentsPayload = studentsResponse?.data ?? studentsResponse;
-            const enrollmentRows = Array.isArray(studentsPayload) ? studentsPayload : (Array.isArray(studentsPayload?.data) ? studentsPayload.data : []);
+      const classesWithCounts = classes.map((cls) => ({
+        id: cls.id,
+        title: asText(cls.subject?.subject_name) || asText(cls.subject?.name) || asText(cls.name) || asText(cls.title) || 'Class',
+        code: asText(cls.subject?.subject_code) || asText(cls.subject?.code) || asText(cls.code) || 'N/A',
+        section: asText(cls.section?.section_code) || asText(cls.section?.name) || asText(cls.section_name) || asText(cls.section) || 'Section',
+        schedule: asText(cls.schedule) || `${asText(cls.days, 'TBD')} · ${asText(cls.time, 'TBD')} · ${asText(cls.room, 'TBD')}`,
+        academicYear: asText(cls.academic_year?.year_code) || asText(cls.academic_year?.name) || asText(cls.academicYear) || 'Current',
+        semester: asText(cls.subject?.semester) || asText(cls.semester) || '1st Semester',
+        studentCount: Number(cls.enrolled_students_count ?? cls.enrollments_count ?? cls.students_count ?? cls.enrolled_count ?? 0),
+      }));
 
-            students = enrollmentRows.map(row => {
-              const stu = row.student || row;
-              return {
-              id: stu.id,
-              name: `${stu.first_name || ''} ${stu.last_name || ''}`.trim() || stu.name || 'Student',
-              academicStatus: stu.academic_status || stu.status || 'On Track',
-              currentGrade: { 
-                score: stu.grade_score || stu.current_grade || 85,
-                letter: stu.grade_letter || 'B'
-              },
-              attendanceRate: stu.attendance_rate || 90,
-              attendanceSummary: stu.attendance_summary || { present: 30, late: 2, excused: 1, absent: 2 },
-              highlights: stu.highlights || [],
-              badges: stu.badges || [],
-            }});
-          } catch (err) {
-            console.error(`Failed to fetch students for class ${cls.id}:`, err);
-          }
-          
-          return {
-            id: cls.id,
-            title: asText(cls.subject?.subject_name) || asText(cls.subject?.name) || asText(cls.name) || asText(cls.title) || 'Class',
-            code: asText(cls.subject?.subject_code) || asText(cls.subject?.code) || asText(cls.code) || 'N/A',
-            section: asText(cls.section?.section_code) || asText(cls.section?.name) || asText(cls.section_name) || asText(cls.section) || 'Section',
-            schedule: asText(cls.schedule) || `${asText(cls.days, 'TBD')} · ${asText(cls.time, 'TBD')} · ${asText(cls.room, 'TBD')}`,
-            academicYear: asText(cls.academic_year?.year_code) || asText(cls.academic_year?.name) || asText(cls.academicYear) || 'Current',
-            semester: asText(cls.subject?.semester) || asText(cls.semester) || '1st Semester',
-            students,
-          };
-        })
-      );
-      
-      setClassData(classesWithStudents.length > 0 ? classesWithStudents : []);
+      setClassData(classesWithCounts.length > 0 ? classesWithCounts : []);
     } catch (err) {
       console.error('Failed to fetch classes:', err);
       setError('Failed to load classes');
@@ -107,13 +78,69 @@ function TeacherStudents() {
     }
   }, []);
 
+  const fetchSelectedClassStudents = useCallback(async () => {
+    if (!selectedClassId) {
+      setSelectedClassStudentsLoading(false);
+      return;
+    }
+
+    if (studentCache[selectedClassId]) {
+      return;
+    }
+
+    setSelectedClassStudentsLoading(true);
+    try {
+      const studentsResponse = await classService.getStudents(selectedClassId, { status: 'enrolled', per_page: 1000 });
+      const studentsPayload = studentsResponse?.data ?? studentsResponse;
+      const enrollmentRows = Array.isArray(studentsPayload) ? studentsPayload : (Array.isArray(studentsPayload?.data) ? studentsPayload.data : []);
+
+      const students = enrollmentRows.map((row) => {
+        const stu = row.student || row;
+        return {
+          id: stu.id,
+          name: `${stu.first_name || ''} ${stu.last_name || ''}`.trim() || stu.name || 'Student',
+          academicStatus: stu.academic_status || stu.status || 'On Track',
+          currentGrade: {
+            score: stu.grade_score || stu.current_grade || 85,
+            letter: stu.grade_letter || 'B',
+          },
+          attendanceRate: stu.attendance_rate || 90,
+          attendanceSummary: stu.attendance_summary || { present: 30, late: 2, excused: 1, absent: 2 },
+          highlights: stu.highlights || [],
+          badges: stu.badges || [],
+        };
+      });
+
+      setStudentCache((prev) => ({ ...prev, [selectedClassId]: students }));
+    } catch (err) {
+      console.error(`Failed to fetch students for class ${selectedClassId}:`, err);
+      setStudentCache((prev) => ({ ...prev, [selectedClassId]: [] }));
+    } finally {
+      setSelectedClassStudentsLoading(false);
+    }
+  }, [selectedClassId, studentCache]);
+
   useEffect(() => {
     fetchData();
   }, [fetchData]);
 
+  useEffect(() => {
+    if (!selectedClassId) {
+      setSelectedClassStudentsLoading(false);
+      return;
+    }
+
+    fetchSelectedClassStudents();
+  }, [selectedClassId, fetchSelectedClassStudents]);
+
   const selectedClass = useMemo(
     () => classData.find(item => item.id === selectedClassId) ?? null,
     [selectedClassId, classData],
+  );
+
+  const selectedClassStudents = useMemo(
+    () => (selectedClassId ? studentCache[selectedClassId] ?? [] : []),
+    [selectedClassId, studentCache],
   );
 
   const filteredStudents = useMemo(() => {
@@ -122,13 +149,13 @@ function TeacherStudents() {
     }
 
     if (!searchTerm.trim()) {
-      return selectedClass.students;
+      return selectedClassStudents;
     }
 
-    return selectedClass.students.filter(student =>
+    return selectedClassStudents.filter(student =>
       student.name.toLowerCase().includes(searchTerm.trim().toLowerCase()),
     );
-  }, [selectedClass, searchTerm]);
+  }, [selectedClass, selectedClassStudents, searchTerm]);
 
   useEffect(() => {
     if (!selectedClass) {
@@ -149,8 +176,8 @@ function TeacherStudents() {
     if (!selectedClass || !selectedStudentId) {
       return null;
     }
-    return selectedClass.students.find(student => student.id === selectedStudentId) ?? null;
-  }, [selectedClass, selectedStudentId]);
+    return selectedClassStudents.find(student => student.id === selectedStudentId) ?? null;
+  }, [selectedClass, selectedClassStudents, selectedStudentId]);
 
   const metrics = useMemo(() => {
     if (!selectedClass) {
@@ -162,7 +189,7 @@ function TeacherStudents() {
       };
     }
 
-    const totalStudents = selectedClass.students.length;
+    const totalStudents = selectedClassStudents.length;
 
     if (totalStudents === 0) {
       return {
@@ -173,9 +200,9 @@ function TeacherStudents() {
       };
     }
 
-    const gradeSum = selectedClass.students.reduce((sum, student) => sum + student.currentGrade.score, 0);
-    const attendanceSum = selectedClass.students.reduce((sum, student) => sum + student.attendanceRate, 0);
-    const atRiskCount = selectedClass.students.filter(student => student.academicStatus === 'At Risk').length;
+    const gradeSum = selectedClassStudents.reduce((sum, student) => sum + student.currentGrade.score, 0);
+    const attendanceSum = selectedClassStudents.reduce((sum, student) => sum + student.attendanceRate, 0);
+    const atRiskCount = selectedClassStudents.filter(student => student.academicStatus === 'At Risk').length;
 
     return {
       totalStudents,
@@ -183,7 +210,7 @@ function TeacherStudents() {
       averageAttendance: Math.round(attendanceSum / totalStudents),
       atRiskCount,
     };
-  }, [selectedClass]);
+  }, [selectedClass, selectedClassStudents]);
 
   const attendanceBreakdown = useMemo(() => {
     if (!selectedStudent) {
@@ -292,7 +319,7 @@ function TeacherStudents() {
                         <p>{item.schedule}</p>
                         <p>{item.semester}</p>
                       </div>
-                      <div className="mt-4 text-sm font-semibold text-gray-900">{item.students.length} students</div>
+                      <div className="mt-4 text-sm font-semibold text-gray-900">{item.studentCount} students</div>
                     </button>
                   ))}
                 </div>
@@ -338,7 +365,7 @@ function TeacherStudents() {
                   <div className="text-xs text-gray-600 space-y-1">
                     <p>{selectedClass.schedule}</p>
                     <p>{selectedClass.semester} • {selectedClass.academicYear}</p>
-                    <p>Total students: <span className="font-semibold text-gray-900">{selectedClass.students.length}</span></p>
+                    <p>Total students: <span className="font-semibold text-gray-900">{selectedClass.studentCount}</span></p>
                   </div>
                 </div>
 
@@ -423,16 +450,30 @@ function TeacherStudents() {
                       <div className="px-4 py-3">Current grade</div>
                     </div>
                     <div className="divide-y divide-gray-100 max-h-105 overflow-y-auto">
-                      {filteredStudents.map(student => (
-                        <button
+                      {selectedClassStudentsLoading ? (
+                        <div className="px-4 py-12 text-center text-sm text-gray-500 flex items-center justify-center gap-2">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Loading students...
+                        </div>
+                      ) : filteredStudents.map(student => (
+                        <div
                           key={student.id}
                           onClick={() => setSelectedStudentId(student.id)}
-                          className={`w-full text-left grid grid-cols-[2fr_1fr_1fr_1fr] items-center px-4 py-4 text-sm transition-colors ${
+                          className={`w-full text-left grid grid-cols-[2fr_1fr_1fr_1fr] items-center px-4 py-4 text-sm transition-colors cursor-pointer ${
                             selectedStudentId === student.id ? 'bg-blue-50/60' : 'hover:bg-gray-50'
                           }`}
                         >
                           <div className="flex flex-col gap-1">
-                            <p className="font-medium text-gray-900">{student.name}</p>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                navigate(`/teacher/students/${student.id}`);
+                              }}
+                              className="text-left font-medium text-blue-700 hover:text-blue-900 hover:underline"
+                            >
+                              {student.name}
+                            </button>
                             <div className="flex flex-wrap gap-1">
                               {student.badges.map(badge => (
                                 <span key={badge} className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
@@ -464,10 +505,10 @@ function TeacherStudents() {
                               <p>Class grade</p>
                             </div>
                           </div>
-                        </button>
+                        </div>
                       ))}
 
-                      {filteredStudents.length === 0 && (
+                      {!selectedClassStudentsLoading && filteredStudents.length === 0 && (
                         <div className="px-4 py-12 text-center text-sm text-gray-500">
                           No students match your search.
                         </div>

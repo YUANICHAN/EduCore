@@ -11,8 +11,6 @@ import {
   UserX,
   Clock,
   Calendar,
-  Download,
-  Printer,
   ChevronRight,
   AlertCircle,
   CheckCircle2,
@@ -327,6 +325,53 @@ function TeacherAttendance() {
       }
     }
   }, [selectedClassId, selectedDate, fetchAttendance, classHasScheduleOnSelectedDate]);
+
+  // Handle keyboard shortcut for random attendance (Shift + 4)
+  const generateRandomAttendance = useCallback(() => {
+    if (students.length === 0) {
+      Swal.fire({
+        icon: 'info',
+        title: 'No Students',
+        text: 'No students to generate attendance for.',
+        confirmButtonColor: '#2563eb',
+      });
+      return;
+    }
+
+    const generateRandomStatus = () => {
+      const random = Math.random() * 100;
+      if (random < 70) return 'present';
+      if (random < 85) return 'absent';
+      return 'excused';
+    };
+
+    setStudents(prev => prev.map(s => ({ 
+      ...s, 
+      status: generateRandomStatus() 
+    })));
+
+    Swal.fire({
+      icon: 'success',
+      title: 'Random Attendance Generated',
+      text: 'Attendance has been randomly assigned (70% present, 15% absent, 15% excused).',
+      confirmButtonColor: '#2563eb',
+      timer: 2000,
+      timerProgressBar: true,
+    });
+  }, [students.length]);
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      // Check for Shift + 4
+      if (event.shiftKey && event.key === '$') { // Shift + 4 produces '$'
+        event.preventDefault();
+        generateRandomAttendance();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [generateRandomAttendance]);
 
   // Handle attendance status change
   const handleStatusChange = (studentId, newStatus) => {
@@ -655,37 +700,23 @@ function TeacherAttendance() {
                 Mark All Present
               </button>
 
-              <div className="flex gap-2">
-                <button
-                  className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium flex items-center gap-2"
-                >
-                  <Download className="w-4 h-4" />
-                  Export
-                </button>
-                <button
-                  className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium flex items-center gap-2"
-                >
-                  <Printer className="w-4 h-4" />
-                  Print
-                </button>
-                <button
-                  onClick={handleSaveAttendance}
-                  disabled={saving}
-                  className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {saving ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Saving...
-                    </>
-                  ) : (
-                    <>
-                      <Save className="w-4 h-4" />
-                      Save Attendance
-                    </>
-                  )}
-                </button>
-              </div>
+              <button
+                onClick={handleSaveAttendance}
+                disabled={saving}
+                className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {saving ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-4 h-4" />
+                    Save Attendance
+                  </>
+                )}
+              </button>
             </div>
 
             {/* Attendance List */}

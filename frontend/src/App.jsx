@@ -24,6 +24,7 @@ import Room from './Pages/Admin/Room.jsx'
 import AcademicYear from './Pages/Admin/AcademicYear.jsx'
 import Reports from './Pages/Admin/Reports.jsx'
 import Settings from './Pages/Admin/Settings.jsx'
+import GradeLocks from './Pages/Admin/GradeLocks.jsx'
 import Enrollment from './Pages/Admin/Enrollment.jsx'
 import TeacherWorkload from './Pages/Admin/TeacherWorkload.jsx'
 import TeacherDashboard from './Pages/Teacher/Dashboard.jsx'
@@ -34,6 +35,7 @@ import SubjectDetail from './Pages/Teacher/SubjectDetail.jsx'
 import TeacherGradebook from './Pages/Teacher/Gradebook.jsx'
 import TeacherAttendance from './Pages/Teacher/Attendance.jsx'
 import TeacherStudents from './Pages/Teacher/Students.jsx'
+import TeacherStudentDetail from './Pages/Teacher/StudentDetail.jsx'
 import TeacherReports from './Pages/Teacher/Reports.jsx'
 import TeacherAnnouncements from './Pages/Teacher/Announcements.jsx'
 import TeacherSchedule from './Pages/Teacher/Schedule.jsx'
@@ -156,6 +158,11 @@ function App() {
               <Settings />
             </ProtectedRoute>
           } />
+          <Route path="/admin/grade-locks" element={
+            <ProtectedRoute allowedRoles={['admin']}>
+              <GradeLocks />
+            </ProtectedRoute>
+          } />
           <Route path="/admin/enrollment" element={
             <ProtectedRoute allowedRoles={['admin']}>
               <Enrollment />
@@ -206,6 +213,11 @@ function App() {
           <Route path="/teacher/students" element={
             <ProtectedRoute allowedRoles={['teacher']}>
               <TeacherStudents />
+            </ProtectedRoute>
+          } />
+          <Route path="/teacher/students/:studentId" element={
+            <ProtectedRoute allowedRoles={['teacher']}>
+              <TeacherStudentDetail />
             </ProtectedRoute>
           } />
           <Route path="/teacher/reports" element={   

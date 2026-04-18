@@ -206,7 +206,7 @@ class ReportController extends Controller
         $validated = $request->validate([
             'student_id' => 'required|exists:students,id',
             'academic_year_id' => 'required|exists:academic_years,id',
-            'grading_period' => 'nullable|in:prelim,midterm,finals,all',
+            'grading_period' => 'nullable|in:prelim,midterm,prefinals,finals,all',
         ]);
 
         $student = Students::find($validated['student_id']);

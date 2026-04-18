@@ -201,7 +201,7 @@ class StudentsController extends Controller
     {
         return response()->json([
             'success' => true,
-            'data' => $student
+            'data' => $student->load(['user', 'program', 'section', 'academicYear'])
         ]);
     }
 

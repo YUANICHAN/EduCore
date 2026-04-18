@@ -82,10 +82,11 @@ const studentService = {
   /**
    * Get student's grades
    * @param {number} studentId 
+   * @param {Object} params
    * @returns {Promise}
    */
-  getGrades: async (studentId) => {
-    const response = await api.get(`/students/${studentId}/grades`);
+  getGrades: async (studentId, params = {}) => {
+    const response = await api.get(`/students/${studentId}/grades`, { params });
     return response.data;
   },
 

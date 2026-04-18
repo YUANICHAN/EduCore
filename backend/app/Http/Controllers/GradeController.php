@@ -6,9 +6,11 @@ use App\Models\Grade;
 use App\Models\Enrollment;
 use App\Models\Classes;
 use App\Models\GradingPeriod;
+use App\Models\Teachers;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class GradeController extends Controller
 {
@@ -65,7 +67,7 @@ class GradeController extends Controller
             'enrollment_id' => 'required|exists:enrollments,id',
             'student_id' => 'required|exists:students,id',
             'class_id' => 'required|exists:classes,id',
-            'grading_period' => 'required|in:prelim,midterm,finals',
+            'grading_period' => 'required|in:prelim,midterm,prefinals,finals',
             'component_type' => 'required|in:quiz,exam,project,assignment,participation,other',
             'component_name' => 'required|string|max:255',
             'score' => 'required|numeric|min:0',
@@ -139,7 +141,7 @@ class GradeController extends Controller
             'enrollment_id' => 'exists:enrollments,id',
             'student_id' => 'exists:students,id',
             'class_id' => 'exists:classes,id',
-            'grading_period' => 'in:prelim,midterm,finals',
+            'grading_period' => 'in:prelim,midterm,prefinals,finals',
             'component_type' => 'in:quiz,exam,project,assignment,participation,other',
             'component_name' => 'string|max:255',
             'score' => 'numeric|min:0',
@@ -215,6 +217,14 @@ class GradeController extends Controller
      */
     public function lock(Request $request, Grade $grade)
     {
+        if (!$this->supportsGradeLocking()) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Grade lock columns are not available in this database yet. Lock action was accepted as a no-op.',
+                'data' => $grade->fresh(['enrollment', 'student', 'class.subject', 'recorder'])
+            ]);
+        }
+
         if ($grade->is_locked) {
             return response()->json([
                 'success' => false,
@@ -222,7 +232,8 @@ class GradeController extends Controller
             ], 422);
         }
 
-        $grade->lock($request->user()->id);
+        $actorId = $request->user()?->id;
+        $grade->lock($actorId);
 
         return response()->json([
             'success' => true,
@@ -236,6 +247,14 @@ class GradeController extends Controller
      */
     public function unlock(Request $request, Grade $grade)
     {
+        if (!$this->supportsGradeLocking()) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Grade lock columns are not available in this database yet. Unlock action was accepted as a no-op.',
+                'data' => $grade->fresh(['enrollment', 'student', 'class.subject', 'recorder'])
+            ]);
+        }
+
         // Check if user is admin
         if ($request->user()->role !== 'admin') {
             return response()->json([
@@ -267,23 +286,54 @@ class GradeController extends Controller
     {
         $validated = $request->validate([
             'class_id' => 'required|exists:classes,id',
-            'grading_period' => 'required|in:prelim,midterm,finals',
+            'grading_period' => 'required|in:prelim,midterm,prefinals,finals',
         ]);
 
-        $count = Grade::where('class_id', $validated['class_id'])
-            ->where('grading_period', $validated['grading_period'])
+        $actorId = $request->user()?->id;
+
+        $baseQuery = Grade::where('class_id', $validated['class_id'])
+            ->where('grading_period', $validated['grading_period']);
+
+        if (!$this->supportsGradeLocking()) {
+            $count = (clone $baseQuery)->count();
+            return response()->json([
+                'success' => true,
+                'message' => "{$count} grades matched. Lock columns are not available in this database yet, so lock was accepted as a no-op.",
+                'locked_count' => $count,
+                'locking_supported' => false,
+            ]);
+        }
+
+        $count = (clone $baseQuery)
             ->where('is_locked', false)
             ->update([
                 'is_locked' => true,
                 'locked_at' => now(),
-                'locked_by' => $request->user()->id,
+                'locked_by' => $actorId,
             ]);
+
+        if ($count === 0) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No unlocked grade rows were found for this class and grading period.',
+                'locked_count' => 0,
+                'locking_supported' => true,
+            ], 422);
+        }
 
         return response()->json([
             'success' => true,
             'message' => "{$count} grades locked successfully",
-            'locked_count' => $count
+            'locked_count' => $count,
+            'locking_supported' => true,
         ]);
+    }
+
+    private function supportsGradeLocking(): bool
+    {
+        return Schema::hasColumn('grades', 'is_locked')
+            && Schema::hasColumn('grades', 'locked_at')
+            && Schema::hasColumn('grades', 'locked_by');
     }
 
     /**
@@ -296,26 +346,32 @@ class GradeController extends Controller
             'grades.*.enrollment_id' => 'required|exists:enrollments,id',
             'grades.*.student_id' => 'required|exists:students,id',
             'grades.*.class_id' => 'required|exists:classes,id',
-            'grades.*.grading_period' => 'required|in:prelim,midterm,finals',
+            'grades.*.grading_period' => 'required|in:prelim,midterm,prefinals,finals',
             'grades.*.component_type' => 'required|in:quiz,exam,project,assignment,participation,other',
             'grades.*.component_name' => 'required|string|max:255',
             'grades.*.score' => 'required|numeric|min:0',
             'grades.*.max_score' => 'required|numeric|min:0',
             'grades.*.percentage_weight' => 'nullable|numeric|min:0|max:100',
+            'grades.*.date_recorded' => 'nullable|date',
+            'grades.*.recorded_by' => 'nullable|exists:teachers,id',
             'grades.*.remarks' => 'nullable|string',
         ]);
 
-        $created = [];
+        $saved = [];
         $errors = [];
         $enrollmentIds = [];
 
         DB::beginTransaction();
         try {
+            $authUser = $request->user();
+
             foreach ($validated['grades'] as $index => $gradeData) {
+                $gradeData['date_recorded'] = $gradeData['date_recorded'] ?? now();
+
                 $periodCheck = $this->checkGradeEncodingWindow(
                     $gradeData['class_id'],
                     $gradeData['grading_period'],
-                    now()
+                    $gradeData['date_recorded']
                 );
 
                 if (!$periodCheck['allowed']) {
@@ -329,19 +385,49 @@ class GradeController extends Controller
                     continue;
                 }
 
-                $gradeData['recorded_by'] = $request->user()->teacher_id ?? $request->user()->id;
-                $gradeData['date_recorded'] = now();
-                
-                $grade = Grade::create($gradeData);
-                $created[] = $grade;
+                $resolvedRecorderId = $gradeData['recorded_by']
+                    ?? ($authUser?->teacher_id ?: null);
+
+                if (!$resolvedRecorderId && $authUser?->id) {
+                    $resolvedRecorderId = Teachers::where('user_id', $authUser->id)->value('id');
+                }
+
+                if (!$resolvedRecorderId) {
+                    $errors[] = "Grade at index {$index}: Unable to resolve teacher recorder id";
+                    continue;
+                }
+
+                $gradeData['recorded_by'] = $resolvedRecorderId;
+
+                $existingGrade = Grade::where('enrollment_id', $gradeData['enrollment_id'])
+                    ->where('student_id', $gradeData['student_id'])
+                    ->where('class_id', $gradeData['class_id'])
+                    ->where('grading_period', $gradeData['grading_period'])
+                    ->where('component_type', $gradeData['component_type'])
+                    ->where('component_name', $gradeData['component_name'])
+                    ->first();
+
+                if ($existingGrade) {
+                    if ($existingGrade->is_locked) {
+                        $errors[] = "Grade at index {$index}: Existing grade is locked";
+                        continue;
+                    }
+
+                    $existingGrade->update($gradeData);
+                    $grade = $existingGrade;
+                } else {
+                    $grade = Grade::create($gradeData);
+                }
+
+                $saved[] = $grade;
                 $enrollmentIds[] = $gradeData['enrollment_id'];
             }
 
-            if (!empty($errors)) {
+            if (count($saved) === 0) {
                 DB::rollBack();
                 return response()->json([
                     'success' => false,
-                    'message' => 'Some grades could not be created',
+                    'message' => 'No grades were saved. Please review the submitted rows.',
                     'errors' => $errors
                 ], 422);
             }
@@ -353,11 +439,18 @@ class GradeController extends Controller
 
             DB::commit();
 
+            $hasErrors = !empty($errors);
+
             return response()->json([
                 'success' => true,
-                'message' => count($created) . ' grades created successfully',
-                'data' => $created
-            ], 201);
+                'message' => $hasErrors
+                    ? count($saved) . ' grades saved with some skipped rows'
+                    : count($saved) . ' grades saved successfully',
+                'saved_count' => count($saved),
+                'error_count' => count($errors),
+                'errors' => $errors,
+                'data' => $saved
+            ], $hasErrors ? 200 : 201);
 
         } catch (\Exception $e) {
             DB::rollBack();
@@ -420,10 +513,15 @@ class GradeController extends Controller
         }
         
         $query->orderBy('student_id')->orderBy('date_recorded', 'desc');
-        
-        $perPage = $request->get('per_page', 50);
+
+        if ($request->boolean('all')) {
+            $grades = $query->get();
+            return response()->json($grades);
+        }
+
+        $perPage = min((int) $request->get('per_page', 500), 5000);
         $grades = $query->paginate($perPage);
-        
+
         return response()->json($grades);
     }
 
@@ -599,10 +697,23 @@ class GradeController extends Controller
         $numberMap = [
             'prelim' => 1,
             'midterm' => 2,
-            'finals' => 3,
+            'prefinals' => 3,
+            'finals' => 4,
         ];
 
+        // If the open period is semester-level, allow edits across terms.
+        if (str_contains($periodName, 'semester')) {
+            return true;
+        }
+
         if (isset($numberMap[$key]) && (int) $openPeriod->period_number === $numberMap[$key]) {
+            return true;
+        }
+
+        // Allow correcting earlier terms while a later term is open.
+        $openOrder = (int) ($openPeriod->period_number ?? 0);
+        $requestedOrder = $numberMap[$key] ?? 0;
+        if ($openOrder > 0 && $requestedOrder > 0 && $requestedOrder <= $openOrder) {
             return true;
         }
 
